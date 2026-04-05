@@ -6,55 +6,103 @@
   <title>Medical Literature Research Agent</title>
   <style>
     :root {
-      --bg: #eef4fb;
-      --bg-deep: #dbe7f4;
-      --surface: #ffffff;
-      --surface-soft: #f8fbff;
-      --navy: #0d3b66;
-      --blue: #1d70b8;
-      --line: #d2dce8;
-      --text: #16324a;
-      --muted: #60758b;
-      --success: #0f7b5f;
-      --warn: #b26b00;
-      --danger: #a6382f;
-      --shadow: 0 24px 60px rgba(13, 59, 102, 0.12);
+      --bg: #edf3f8;
+      --bg-2: #dfeaf2;
+      --surface: rgba(255, 255, 255, 0.9);
+      --surface-strong: #ffffff;
+      --surface-deep: #0f2740;
+      --surface-tint: #f7fbff;
+      --ink: #163047;
+      --ink-soft: #5b7084;
+      --navy: #102e4a;
+      --blue: #1d6fb6;
+      --blue-2: #5da9e9;
+      --teal: #0a8c84;
+      --gold: #b67b13;
+      --red: #b13d35;
+      --line: rgba(16, 46, 74, 0.12);
+      --line-strong: rgba(16, 46, 74, 0.2);
+      --shadow-xl: 0 28px 70px rgba(14, 38, 61, 0.12);
+      --shadow-lg: 0 18px 40px rgba(14, 38, 61, 0.08);
+      --radius-xl: 28px;
+      --radius-lg: 22px;
+      --radius-md: 16px;
     }
 
     * {
       box-sizing: border-box;
     }
 
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
+      color: var(--ink);
       font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      color: var(--text);
       background:
-        radial-gradient(circle at top left, rgba(29, 112, 184, 0.14), transparent 32%),
-        linear-gradient(180deg, var(--bg) 0%, #f7fbff 100%);
+        radial-gradient(circle at top left, rgba(93, 169, 233, 0.28), transparent 24%),
+        radial-gradient(circle at 88% 12%, rgba(10, 140, 132, 0.12), transparent 18%),
+        linear-gradient(180deg, #f5f9fd 0%, var(--bg) 42%, var(--bg-2) 100%);
     }
 
-    .layout {
-      width: min(1380px, calc(100% - 28px));
-      margin: 18px auto;
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(16, 46, 74, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16, 46, 74, 0.03) 1px, transparent 1px);
+      background-size: 56px 56px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.18), transparent 70%);
+    }
+
+    h1, h2, h3, h4, .display {
+      font-family: Georgia, "Times New Roman", serif;
+      letter-spacing: -0.02em;
+      margin: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .page {
+      width: min(1500px, calc(100% - 28px));
+      margin: 18px auto 28px;
       display: grid;
-      grid-template-columns: 280px minmax(0, 1fr);
+      grid-template-columns: 300px minmax(0, 1fr);
       gap: 20px;
+      position: relative;
+      z-index: 1;
     }
 
-    .card {
+    .panel {
       background: var(--surface);
-      border: 1px solid rgba(13, 59, 102, 0.10);
-      border-radius: 22px;
-      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      border: 1px solid rgba(255, 255, 255, 0.65);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-xl);
+    }
+
+    .panel-soft {
+      background: var(--surface-tint);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
     }
 
     .sidebar {
       padding: 18px;
       display: grid;
-      gap: 18px;
       align-content: start;
+      gap: 16px;
       position: sticky;
       top: 18px;
       max-height: calc(100vh - 36px);
@@ -67,99 +115,212 @@
       min-width: 0;
     }
 
-    .hero {
-      padding: 28px;
-      color: #ffffff;
-      background:
-        linear-gradient(130deg, rgba(13, 59, 102, 0.98), rgba(29, 112, 184, 0.92)),
-        var(--navy);
-      overflow: hidden;
+    .masthead {
       position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(140deg, rgba(16, 46, 74, 0.98), rgba(17, 72, 124, 0.94) 55%, rgba(20, 120, 176, 0.92)),
+        var(--navy);
+      color: #fff;
+      padding: 30px;
+      display: grid;
+      gap: 24px;
     }
 
-    .hero::after {
+    .masthead::before,
+    .masthead::after {
       content: "";
       position: absolute;
-      inset: auto -40px -40px auto;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      filter: blur(2px);
+    }
+
+    .masthead::before {
+      width: 320px;
+      height: 320px;
+      right: -60px;
+      top: -90px;
+    }
+
+    .masthead::after {
       width: 180px;
       height: 180px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.08);
+      left: 48%;
+      bottom: -80px;
     }
 
     .eyebrow {
-      font-size: 0.76rem;
-      letter-spacing: 0.12em;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.78rem;
       text-transform: uppercase;
-      opacity: 0.8;
-      margin-bottom: 12px;
+      letter-spacing: 0.14em;
+      color: rgba(255, 255, 255, 0.75);
     }
 
-    h1, h2, h3 {
-      margin: 0;
+    .eyebrow::before {
+      content: "";
+      width: 36px;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.45);
     }
 
-    .hero h1 {
-      font-size: clamp(2.1rem, 4vw, 3.2rem);
-      line-height: 1.03;
-      margin-bottom: 10px;
-      max-width: 760px;
+    .masthead-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(240px, 0.9fr);
+      gap: 24px;
+      position: relative;
+      z-index: 1;
     }
 
-    .hero p {
+    .masthead-copy h1 {
+      font-size: clamp(2.5rem, 4vw, 4rem);
+      line-height: 0.98;
+      margin-bottom: 14px;
+      max-width: 780px;
+    }
+
+    .masthead-copy p {
       margin: 0;
       max-width: 720px;
-      color: rgba(255, 255, 255, 0.88);
-      line-height: 1.65;
+      line-height: 1.75;
+      color: rgba(255, 255, 255, 0.86);
+      font-size: 1.02rem;
+    }
+
+    .hero-meta {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .meta-card {
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .meta-card h3 {
+      font-size: 0.96rem;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+
+    .meta-card p {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.78);
+      line-height: 1.6;
+      font-size: 0.92rem;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .stat-tile {
+      padding: 16px 18px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+    }
+
+    .stat-tile strong {
+      display: block;
+      font-size: 1.5rem;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .stat-tile span {
+      color: rgba(255, 255, 255, 0.76);
+      font-size: 0.9rem;
     }
 
     .composer {
       padding: 22px;
       display: grid;
       gap: 18px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 251, 255, 0.98)),
+        var(--surface-strong);
     }
 
-    .composer-grid {
+    .composer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 18px;
+    }
+
+    .composer-header p,
+    .muted {
+      margin: 0;
+      color: var(--ink-soft);
+      line-height: 1.65;
+      font-size: 0.94rem;
+    }
+
+    .composer-shell {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 16px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
+      gap: 18px;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
     }
 
     .field label,
     .stack-label {
-      display: block;
-      font-size: 0.92rem;
-      font-weight: 700;
-      margin-bottom: 8px;
+      font-size: 0.88rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
       color: var(--navy);
+    }
+
+    .input-shell {
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.96)),
+        var(--surface-strong);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
     }
 
     textarea,
     input,
     select {
       width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 13px 14px;
-      font: inherit;
-      color: var(--text);
-      background: var(--surface-soft);
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      padding: 15px 16px;
+      outline: none;
     }
 
     textarea {
-      min-height: 154px;
+      min-height: 168px;
       resize: vertical;
-      line-height: 1.55;
+      line-height: 1.65;
     }
 
-    textarea:focus,
-    input:focus,
-    select:focus {
-      outline: 2px solid rgba(29, 112, 184, 0.2);
-      border-color: var(--blue);
+    .input-shell:focus-within {
+      border-color: rgba(29, 111, 182, 0.45);
+      box-shadow:
+        0 0 0 5px rgba(29, 111, 182, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.85);
     }
 
-    .filters {
+    .filter-grid {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 12px;
@@ -168,29 +329,35 @@
     .toggle-row {
       display: flex;
       flex-wrap: wrap;
+      justify-content: space-between;
       gap: 16px;
       align-items: center;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, #f7fbff, #edf5fb);
+      border: 1px solid var(--line);
     }
 
     .toggle {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      font-size: 0.95rem;
-      color: var(--text);
+      gap: 10px;
+      color: var(--ink);
+      font-weight: 600;
     }
 
     .toggle input {
       width: 16px;
       height: 16px;
+      padding: 0;
       margin: 0;
     }
 
-    .actions {
+    .action-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 12px;
       align-items: center;
+      gap: 12px;
     }
 
     button {
@@ -198,10 +365,9 @@
       border: 0;
       border-radius: 999px;
       padding: 12px 18px;
-      font: inherit;
       font-weight: 700;
       cursor: pointer;
-      transition: transform 0.18s ease, opacity 0.18s ease, box-shadow 0.18s ease;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
     }
 
     button:hover {
@@ -209,33 +375,38 @@
     }
 
     button:disabled {
-      cursor: not-allowed;
-      opacity: 0.68;
       transform: none;
+      opacity: 0.65;
+      cursor: not-allowed;
     }
 
     .primary-btn {
-      color: #ffffff;
-      background: linear-gradient(135deg, var(--navy), var(--blue));
-      box-shadow: 0 12px 24px rgba(29, 112, 184, 0.22);
+      color: #fff;
+      background: linear-gradient(135deg, #113554, #1d6fb6 62%, #5da9e9);
+      box-shadow: 0 16px 28px rgba(29, 111, 182, 0.22);
     }
 
     .secondary-btn {
       color: var(--navy);
-      background: #e8f1fb;
+      background: linear-gradient(180deg, #f0f7ff, #deebf9);
+      border: 1px solid rgba(29, 111, 182, 0.15);
     }
 
     .ghost-btn {
-      color: var(--text);
-      background: #f2f6fb;
+      color: var(--ink);
+      background: linear-gradient(180deg, #f9fbfe, #eff5fb);
+      border: 1px solid var(--line);
     }
 
     .inline-status {
       display: none;
-      color: var(--muted);
-      font-size: 0.94rem;
       align-items: center;
       gap: 10px;
+      color: var(--ink-soft);
+      font-size: 0.93rem;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(29, 111, 182, 0.08);
     }
 
     .inline-status.active {
@@ -247,7 +418,7 @@
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      border: 2px solid rgba(29, 112, 184, 0.20);
+      border: 2px solid rgba(29, 111, 182, 0.18);
       border-top-color: var(--blue);
       animation: spin 0.9s linear infinite;
     }
@@ -255,79 +426,53 @@
     .error {
       display: none;
       padding: 14px 16px;
-      border-radius: 16px;
-      background: #fff2f0;
-      color: var(--danger);
-      border: 1px solid #f0c5c0;
+      border-radius: 18px;
+      border: 1px solid rgba(177, 61, 53, 0.22);
+      background: rgba(255, 240, 238, 0.95);
+      color: var(--red);
     }
 
     .error.active {
       display: block;
     }
 
+    .mini-card {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .mini-card h3 {
+      font-size: 1.05rem;
+      color: var(--navy);
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #ebf4fd;
+      color: var(--navy);
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+
     .history-header,
-    .panel-header {
+    .section-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 12px;
     }
 
-    .sidebar h2,
-    .results-panel h2 {
-      color: var(--navy);
-      font-size: 1.04rem;
-    }
-
-    .history-list {
-      display: grid;
-      gap: 10px;
-    }
-
-    .history-item {
-      padding: 12px 13px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: var(--surface-soft);
-      cursor: pointer;
-    }
-
-    .history-item strong {
-      display: block;
-      margin-bottom: 6px;
-      color: var(--navy);
-      font-size: 0.92rem;
-    }
-
-    .history-item p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 0.88rem;
-      line-height: 1.45;
-    }
-
-    .history-empty,
-    .muted {
-      color: var(--muted);
-      font-size: 0.92rem;
-      line-height: 1.55;
-    }
-
-    .results-grid {
-      display: grid;
-      gap: 18px;
-    }
-
-    .results-grid.hidden {
-      display: none;
-    }
-
-    .results-panel {
-      padding: 22px;
-      display: grid;
-      gap: 16px;
-    }
-
+    .history-list,
     .activity-list,
     .reference-list,
     .trial-list,
@@ -336,143 +481,259 @@
       gap: 12px;
     }
 
-    .activity-item,
-    .reference-card,
-    .trial-card,
-    .cache-card {
-      padding: 15px 16px;
+    .history-item {
+      border: 1px solid var(--line);
       border-radius: 18px;
-      border: 1px solid var(--line);
-      background: var(--surface-soft);
+      background: linear-gradient(180deg, #fff, #f7fbff);
+      text-align: left;
+      padding: 14px;
+      box-shadow: var(--shadow-lg);
     }
 
-    .activity-step {
-      font-size: 0.78rem;
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
-      color: var(--blue);
-      margin-bottom: 5px;
+    .history-item strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--navy);
+      font-size: 0.94rem;
     }
 
-    .result-section {
+    .history-item p {
+      margin: 0;
+      font-size: 0.88rem;
+      color: var(--ink-soft);
+      line-height: 1.55;
+    }
+
+    .history-empty {
+      color: var(--ink-soft);
+      font-size: 0.92rem;
+      line-height: 1.6;
+      padding: 6px 0;
+    }
+
+    .results-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
-      gap: 18px;
+      gap: 20px;
     }
 
-    .answer-card,
-    .side-card {
-      padding: 22px;
-      border-radius: 22px;
+    .results-grid.hidden {
+      display: none;
+    }
+
+    .overview-band {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(241, 247, 253, 0.98));
+    }
+
+    .overview-card {
+      padding: 16px 18px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, #fff, #f6fbff);
       border: 1px solid var(--line);
-      background: var(--surface-soft);
+    }
+
+    .overview-card span {
+      display: block;
+      color: var(--ink-soft);
+      font-size: 0.82rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .overview-card strong {
+      display: block;
+      color: var(--navy);
+      font-size: 1.05rem;
+      line-height: 1.35;
+    }
+
+    .results-mosaic {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.8fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    .results-column {
+      display: grid;
+      gap: 20px;
+    }
+
+    .results-panel {
+      padding: 22px;
+      display: grid;
+      gap: 16px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(247, 251, 255, 0.98)),
+        var(--surface-strong);
+    }
+
+    .answer-card {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .answer-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -50px -50px auto;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(93, 169, 233, 0.16), transparent 70%);
+      pointer-events: none;
+    }
+
+    .answer-content,
+    .simple-answer {
+      position: relative;
+      z-index: 1;
     }
 
     .answer-content p,
     .simple-answer p {
-      margin: 0 0 12px;
-      line-height: 1.75;
+      margin: 0 0 14px;
+      line-height: 1.82;
+      font-size: 1rem;
     }
 
     .citation {
       color: var(--blue);
-      font-weight: 700;
+      font-weight: 800;
+      background: rgba(29, 111, 182, 0.1);
+      border-radius: 999px;
+      padding: 1px 7px;
     }
 
+    .activity-item,
+    .reference-card,
+    .trial-card,
+    .cache-card,
     .metric {
-      padding: 12px 14px;
-      border-radius: 16px;
-      background: #ffffff;
+      padding: 16px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, #fff, #f7fbff);
       border: 1px solid var(--line);
-      margin-bottom: 10px;
     }
 
-    .metric strong {
-      display: block;
-      margin-bottom: 4px;
-      color: var(--navy);
+    .activity-item {
+      position: relative;
+      padding-left: 22px;
+    }
+
+    .activity-item::before {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 22px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 0 0 5px rgba(29, 111, 182, 0.12);
+    }
+
+    .activity-step {
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--blue);
+      font-size: 0.78rem;
+      margin-bottom: 6px;
+      font-weight: 800;
     }
 
     .confidence-pill {
       display: inline-flex;
-      padding: 6px 11px;
+      align-items: center;
+      padding: 7px 12px;
       border-radius: 999px;
-      font-weight: 700;
-      font-size: 0.88rem;
-      margin-bottom: 10px;
+      font-size: 0.85rem;
+      font-weight: 800;
+      margin-bottom: 12px;
     }
 
     .confidence-high {
-      color: var(--success);
-      background: #e7f8f2;
+      color: var(--teal);
+      background: rgba(10, 140, 132, 0.12);
     }
 
     .confidence-moderate {
-      color: var(--warn);
-      background: #fff4de;
+      color: var(--gold);
+      background: rgba(182, 123, 19, 0.14);
     }
 
     .confidence-low {
-      color: var(--danger);
-      background: #fdebea;
+      color: var(--red);
+      background: rgba(177, 61, 53, 0.12);
+    }
+
+    .metric strong {
+      display: block;
+      color: var(--navy);
+      margin-bottom: 4px;
     }
 
     .reference-card h3,
     .trial-card h3,
     .cache-card h3 {
-      font-size: 1rem;
+      font-size: 1.05rem;
       margin-bottom: 8px;
       color: var(--navy);
     }
 
     .reference-meta,
     .trial-meta,
-    .cache-meta {
-      margin: 0 0 8px;
-      font-size: 0.92rem;
-      line-height: 1.55;
-      color: var(--muted);
-    }
-
+    .cache-meta,
     .reference-summary,
     .highlight-list {
-      margin: 10px 0 0;
+      margin: 0 0 10px;
+      color: var(--ink-soft);
+      line-height: 1.65;
       font-size: 0.94rem;
-      line-height: 1.6;
     }
 
     .highlight-chip {
       display: inline-block;
       margin: 6px 6px 0 0;
-      padding: 7px 10px;
+      padding: 8px 11px;
       border-radius: 999px;
-      background: #e2effc;
+      background: linear-gradient(180deg, #ebf5ff, #dcecff);
       color: var(--navy);
-      font-size: 0.86rem;
-      line-height: 1.4;
-    }
-
-    a {
-      color: var(--blue);
-      text-decoration: none;
-      font-weight: 600;
-    }
-
-    .section-block {
-      display: grid;
-      gap: 12px;
+      font-size: 0.84rem;
+      font-weight: 700;
+      line-height: 1.45;
     }
 
     .simple-answer {
       display: none;
-      padding: 16px;
-      border-radius: 18px;
-      background: #ffffff;
+      padding: 18px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, #fff, #f3faff);
       border: 1px solid var(--line);
     }
 
     .simple-answer.active {
       display: block;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .sidebar-section {
+      display: grid;
+      gap: 12px;
+      padding: 4px 0;
     }
 
     @keyframes spin {
@@ -481,8 +742,10 @@
       }
     }
 
-    @media (max-width: 1120px) {
-      .layout {
+    @media (max-width: 1240px) {
+      .page,
+      .results-mosaic,
+      .masthead-grid {
         grid-template-columns: 1fr;
       }
 
@@ -491,159 +754,257 @@
         max-height: none;
       }
 
-      .result-section,
-      .composer-grid,
-      .filters {
+      .hero-stats,
+      .overview-band,
+      .filter-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .composer-shell {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        width: min(100% - 16px, 1500px);
+        margin: 10px auto 20px;
+      }
+
+      .masthead,
+      .composer,
+      .results-panel,
+      .sidebar {
+        padding: 18px;
+      }
+
+      .hero-stats,
+      .overview-band,
+      .filter-grid {
         grid-template-columns: 1fr;
       }
     }
   </style>
 </head>
 <body>
-  <main class="layout">
-    <aside class="card sidebar">
-      <div class="history-header">
-        <h2>Session History</h2>
-        <button id="clearHistoryButton" class="ghost-btn" type="button">Clear</button>
-      </div>
-      <div class="muted">Past questions and answers are saved in this browser session so follow-up questions can build on prior work.</div>
-      <div id="historyList" class="history-list"></div>
-      <div class="section-block">
-        <h2>Workspace Notes</h2>
-        <div class="muted">Use compare mode for head-to-head treatment questions, then export the result as a PDF report for lab or team review.</div>
-      </div>
+  <main class="page">
+    <aside class="panel sidebar">
+      <section class="sidebar-section">
+        <div class="history-header">
+          <h2>Recent Questions</h2>
+          <button id="clearHistoryButton" class="ghost-btn" type="button">Clear</button>
+        </div>
+        <div class="muted">Your recent questions are saved in this browser so you can come back to them or ask a follow-up.</div>
+        <div id="historyList" class="history-list"></div>
+      </section>
     </aside>
 
     <section class="main">
-      <section class="card hero">
-        <div class="eyebrow">Clinical Evidence Workspace</div>
-        <h1>Medical Literature Research Agent</h1>
-        <p>Search PubMed, check ClinicalTrials.gov, reuse cached abstracts from ChromaDB, and generate evidence-based answers with confidence scoring, citations, and export-ready reporting.</p>
+      <section class="panel masthead">
+        <div class="masthead-grid">
+          <div class="masthead-copy">
+            <div class="eyebrow">Medical Research Assistant</div>
+            <h1>Ask a clinical question and get a clear evidence-based answer.</h1>
+            <p>Search PubMed, review recent studies, compare treatments, and see a plain-language summary with citations you can check yourself.</p>
+          </div>
+
+          <div class="hero-meta">
+            <div class="meta-card">
+              <h3>What you can do</h3>
+              <p>Search published studies, limit by year or study type, and compare two treatment options side by side.</p>
+            </div>
+            <div class="meta-card">
+              <h3>What you get</h3>
+              <p>A concise answer, study summaries, source links, confidence notes, and a PDF export if you want to save it.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-stats">
+          <div class="stat-tile">
+            <strong>PubMed</strong>
+            <span>Find published papers</span>
+          </div>
+          <div class="stat-tile">
+            <strong>Trials</strong>
+            <span>See ongoing studies</span>
+          </div>
+          <div class="stat-tile">
+            <strong>Compare</strong>
+            <span>Review two options</span>
+          </div>
+          <div class="stat-tile">
+            <strong>Export</strong>
+            <span>Save as PDF</span>
+          </div>
+        </div>
       </section>
 
-      <section class="card composer">
-        <div class="composer-grid">
-          <div class="field">
-            <label for="question">Clinical question</label>
-            <textarea id="question" placeholder="Example: In adults with acute low back pain, do NSAIDs improve pain and function compared with acetaminophen?"></textarea>
+      <section class="panel composer">
+          <div class="composer-header">
+            <div>
+              <h2>Ask Your Question</h2>
+              <p>Type your question below. Use the extra options only if you want to narrow the search or compare two treatments.</p>
+            </div>
+            <div class="pill-row">
+              <span class="pill">Simple answer</span>
+              <span class="pill">References included</span>
+            </div>
           </div>
-          <div class="field">
-            <label for="comparisonQuestion">Comparison question or treatment B</label>
-            <textarea id="comparisonQuestion" placeholder="Example: Compared with oral corticosteroids, does intratympanic steroid therapy improve hearing recovery in idiopathic sudden sensorineural hearing loss?"></textarea>
-          </div>
-        </div>
 
-        <div class="filters">
-          <div class="field">
-            <label for="mode">Mode</label>
-            <select id="mode">
-              <option value="standard">Standard synthesis</option>
-              <option value="compare">Compare two treatments</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="studyType">Study type</label>
-            <select id="studyType">
-              <option value="">Any study type</option>
-              <option value="clinical-trial">Clinical trial</option>
-              <option value="randomized-controlled-trial">Randomized controlled trial</option>
-              <option value="meta-analysis">Meta-analysis</option>
-              <option value="systematic-review">Systematic review</option>
-              <option value="review">Review</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="yearFrom">Year from</label>
-            <input id="yearFrom" type="number" min="1900" max="2100" placeholder="2022" />
-          </div>
-          <div class="field">
-            <label for="yearTo">Year to</label>
-            <input id="yearTo" type="number" min="1900" max="2100" placeholder="2026" />
-          </div>
-          <div class="field">
-            <label for="maxResults">PubMed papers</label>
-            <select id="maxResults">
-              <option value="3">3</option>
-              <option value="5" selected>5</option>
-              <option value="7">7</option>
-              <option value="10">10</option>
-            </select>
-          </div>
-        </div>
+          <div class="composer-shell">
+            <div class="field">
+              <label for="question">Clinical Question</label>
+              <div class="input-shell">
+                <textarea id="question" placeholder="Example: In adults with acute low back pain, do NSAIDs improve pain and function compared with acetaminophen?"></textarea>
+              </div>
+            </div>
 
-        <div class="toggle-row">
-          <label class="toggle"><input id="includeTrials" type="checkbox" checked /> Include ClinicalTrials.gov</label>
-          <div class="muted">Follow-up mode is automatic within the current browser session.</div>
-        </div>
+            <div class="field">
+              <label for="comparisonQuestion">Second Question For Comparison</label>
+              <div class="input-shell">
+                <textarea id="comparisonQuestion" placeholder="Example: Compared with oral corticosteroids, does intratympanic steroid therapy improve hearing recovery in idiopathic sudden sensorineural hearing loss?"></textarea>
+              </div>
+            </div>
+          </div>
 
-        <div class="actions">
-          <button id="runButton" class="primary-btn" type="button">Run research</button>
-          <button id="simplifyButton" class="secondary-btn" type="button" disabled>Simplify this answer</button>
-          <button id="exportButton" class="ghost-btn" type="button" disabled>Export PDF</button>
-          <div id="loading" class="inline-status">The agent is working through the evidence.</div>
-        </div>
-        <div id="error" class="error"></div>
+          <div class="filter-grid">
+            <div class="field">
+              <label for="mode">Mode</label>
+              <div class="input-shell">
+                <select id="mode">
+                  <option value="standard">Standard synthesis</option>
+                  <option value="compare">Compare two treatments</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="studyType">Study type</label>
+              <div class="input-shell">
+                <select id="studyType">
+                  <option value="">Any study type</option>
+                  <option value="clinical-trial">Clinical trial</option>
+                  <option value="randomized-controlled-trial">Randomized controlled trial</option>
+                  <option value="meta-analysis">Meta-analysis</option>
+                  <option value="systematic-review">Systematic review</option>
+                  <option value="review">Review</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="yearFrom">Year from</label>
+              <div class="input-shell">
+                <input id="yearFrom" type="number" min="1900" max="2100" placeholder="2022" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="yearTo">Year to</label>
+              <div class="input-shell">
+                <input id="yearTo" type="number" min="1900" max="2100" placeholder="2026" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="maxResults">PubMed papers</label>
+              <div class="input-shell">
+                <select id="maxResults">
+                  <option value="3">3</option>
+                  <option value="5" selected>5</option>
+                  <option value="7">7</option>
+                  <option value="10">10</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="toggle-row">
+            <label class="toggle"><input id="includeTrials" type="checkbox" checked /> Include ongoing clinical trials</label>
+            <div class="muted">If you ask another question later, the app can build on the same session.</div>
+          </div>
+
+          <div class="action-row">
+            <button id="runButton" class="primary-btn" type="button">Run Research</button>
+            <button id="simplifyButton" class="secondary-btn" type="button" disabled>Simplify This Answer</button>
+            <button id="exportButton" class="ghost-btn" type="button" disabled>Export PDF</button>
+            <div id="loading" class="inline-status">The agent is tracing through the evidence.</div>
+          </div>
+
+          <div id="error" class="error"></div>
       </section>
 
       <section id="results" class="results-grid hidden">
-        <section class="card results-panel">
-          <div class="panel-header">
-            <h2>Research Activity</h2>
+        <section class="panel overview-band">
+          <div class="overview-card">
+            <span>Session</span>
+            <strong id="sessionIdValue">Pending</strong>
           </div>
-          <div id="activityList" class="activity-list"></div>
-        </section>
-
-        <section class="result-section">
-          <div class="card answer-card">
-            <div class="panel-header">
-              <h2>Synthesized Answer</h2>
-            </div>
-            <div id="answer" class="answer-content"></div>
-            <div id="simpleAnswer" class="simple-answer"></div>
+          <div class="overview-card">
+            <span>Filters</span>
+            <strong id="filtersUsed">Default search</strong>
           </div>
-
-          <div class="card side-card">
-            <div class="panel-header">
-              <h2>Evidence Strength</h2>
-            </div>
-            <div id="confidenceBox"></div>
-            <div class="metric">
-              <strong>Session ID</strong>
-              <span id="sessionIdValue" class="muted"></span>
-            </div>
-            <div class="metric">
-              <strong>Filters used</strong>
-              <span id="filtersUsed" class="muted"></span>
-            </div>
+          <div class="overview-card">
+            <span>Status</span>
+            <strong>Research completed</strong>
+          </div>
+          <div class="overview-card">
+            <span>Deliverables</span>
+            <strong>Citations, confidence, export</strong>
           </div>
         </section>
 
-        <section class="card results-panel">
-          <div class="panel-header">
-            <h2>References</h2>
-          </div>
-          <div id="references" class="reference-list"></div>
-        </section>
+        <section class="results-mosaic">
+          <div class="results-column">
+            <section class="panel results-panel answer-card">
+              <div class="section-header">
+                <h2>Synthesized Answer</h2>
+              </div>
+              <div id="answer" class="answer-content"></div>
+              <div id="simpleAnswer" class="simple-answer"></div>
+            </section>
 
-        <section id="comparisonSection" class="card results-panel" style="display:none;">
-          <div class="panel-header">
-            <h2>Comparison References</h2>
-          </div>
-          <div id="comparisonReferences" class="reference-list"></div>
-        </section>
+            <section class="panel results-panel">
+              <div class="section-header">
+                <h2>References</h2>
+              </div>
+              <div id="references" class="reference-list"></div>
+            </section>
 
-        <section class="card results-panel">
-          <div class="panel-header">
-            <h2>Ongoing Trials</h2>
+            <section id="comparisonSection" class="panel results-panel" style="display:none;">
+              <div class="section-header">
+                <h2>Comparison References</h2>
+              </div>
+              <div id="comparisonReferences" class="reference-list"></div>
+            </section>
           </div>
-          <div id="trials" class="trial-list"></div>
-        </section>
 
-        <section class="card results-panel">
-          <div class="panel-header">
-            <h2>Cached Related Abstracts</h2>
+          <div class="results-column">
+            <section class="panel results-panel">
+              <div class="section-header">
+                <h2>Search Progress</h2>
+              </div>
+              <div id="activityList" class="activity-list"></div>
+            </section>
+
+            <section class="panel results-panel">
+              <div class="section-header">
+                <h2>Confidence</h2>
+              </div>
+              <div id="confidenceBox"></div>
+            </section>
+
+            <section class="panel results-panel">
+              <div class="section-header">
+                <h2>Ongoing Trials</h2>
+              </div>
+              <div id="trials" class="trial-list"></div>
+            </section>
+
+            <section class="panel results-panel">
+              <div class="section-header">
+                <h2>Similar Past Results</h2>
+              </div>
+              <div id="cachedMatches" class="cached-list"></div>
+            </section>
           </div>
-          <div id="cachedMatches" class="cached-list"></div>
         </section>
       </section>
     </section>
