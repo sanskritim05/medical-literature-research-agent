@@ -361,7 +361,7 @@ def run_research(
 
 def simplify_text(question: str, answer: str) -> str:
     llm = _build_llm()
-    system_prompt = "Rewrite medical evidence summaries at an accessible patient reading level without changing the meaning."
+    system_prompt = "Rewrite medical evidence summaries at an accessible reading level without changing the meaning."
     user_prompt = f"Question: {question}\n\nOriginal answer:\n{answer}\n\nRewrite this in clear plain language at roughly an 8th-grade reading level."
     response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
     return getattr(response, "content", "").strip()
