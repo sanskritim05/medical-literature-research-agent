@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Medical Literature Research Agent</title>
+  <style>
+    :root {
+      --bg: #eef4fb;
+      --bg-deep: #dbe7f4;
+      --surface: #ffffff;
+      --surface-soft: #f8fbff;
+      --navy: #0d3b66;
+      --blue: #1d70b8;
+      --line: #d2dce8;
+      --text: #16324a;
+      --muted: #60758b;
+      --success: #0f7b5f;
+      --warn: #b26b00;
+      --danger: #a6382f;
+      --shadow: 0 24px 60px rgba(13, 59, 102, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(29, 112, 184, 0.14), transparent 32%),
+        linear-gradient(180deg, var(--bg) 0%, #f7fbff 100%);
+    }
+
+    .layout {
+      width: min(1380px, calc(100% - 28px));
+      margin: 18px auto;
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid rgba(13, 59, 102, 0.10);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+    }
+
+    .sidebar {
+      padding: 18px;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+      position: sticky;
+      top: 18px;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+    }
+
+    .main {
+      display: grid;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    .hero {
+      padding: 28px;
+      color: #ffffff;
+      background:
+        linear-gradient(130deg, rgba(13, 59, 102, 0.98), rgba(29, 112, 184, 0.92)),
+        var(--navy);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -40px auto;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .eyebrow {
+      font-size: 0.76rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      opacity: 0.8;
+      margin-bottom: 12px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+    }
+
+    .hero h1 {
+      font-size: clamp(2.1rem, 4vw, 3.2rem);
+      line-height: 1.03;
+      margin-bottom: 10px;
+      max-width: 760px;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 720px;
+      color: rgba(255, 255, 255, 0.88);
+      line-height: 1.65;
+    }
+
+    .composer {
+      padding: 22px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .composer-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .field label,
+    .stack-label {
+      display: block;
+      font-size: 0.92rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--navy);
+    }
+
+    textarea,
+    input,
+    select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 13px 14px;
+      font: inherit;
+      color: var(--text);
+      background: var(--surface-soft);
+    }
+
+    textarea {
+      min-height: 154px;
+      resize: vertical;
+      line-height: 1.55;
+    }
+
+    textarea:focus,
+    input:focus,
+    select:focus {
+      outline: 2px solid rgba(29, 112, 184, 0.2);
+      border-color: var(--blue);
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .toggle-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.95rem;
+      color: var(--text);
+    }
+
+    .toggle input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.18s ease, opacity 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.68;
+      transform: none;
+    }
+
+    .primary-btn {
+      color: #ffffff;
+      background: linear-gradient(135deg, var(--navy), var(--blue));
+      box-shadow: 0 12px 24px rgba(29, 112, 184, 0.22);
+    }
+
+    .secondary-btn {
+      color: var(--navy);
+      background: #e8f1fb;
+    }
+
+    .ghost-btn {
+      color: var(--text);
+      background: #f2f6fb;
+    }
+
+    .inline-status {
+      display: none;
+      color: var(--muted);
+      font-size: 0.94rem;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .inline-status.active {
+      display: inline-flex;
+    }
+
+    .inline-status::before {
+      content: "";
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid rgba(29, 112, 184, 0.20);
+      border-top-color: var(--blue);
+      animation: spin 0.9s linear infinite;
+    }
+
+    .error {
+      display: none;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: #fff2f0;
+      color: var(--danger);
+      border: 1px solid #f0c5c0;
+    }
+
+    .error.active {
+      display: block;
+    }
+
+    .history-header,
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sidebar h2,
+    .results-panel h2 {
+      color: var(--navy);
+      font-size: 1.04rem;
+    }
+
+    .history-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .history-item {
+      padding: 12px 13px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface-soft);
+      cursor: pointer;
+    }
+
+    .history-item strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--navy);
+      font-size: 0.92rem;
+    }
+
+    .history-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+
+    .history-empty,
+    .muted {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+
+    .results-grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .results-grid.hidden {
+      display: none;
+    }
+
+    .results-panel {
+      padding: 22px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .activity-list,
+    .reference-list,
+    .trial-list,
+    .cached-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .activity-item,
+    .reference-card,
+    .trial-card,
+    .cache-card {
+      padding: 15px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+    }
+
+    .activity-step {
+      font-size: 0.78rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 5px;
+    }
+
+    .result-section {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
+      gap: 18px;
+    }
+
+    .answer-card,
+    .side-card {
+      padding: 22px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+    }
+
+    .answer-content p,
+    .simple-answer p {
+      margin: 0 0 12px;
+      line-height: 1.75;
+    }
+
+    .citation {
+      color: var(--blue);
+      font-weight: 700;
+    }
+
+    .metric {
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      margin-bottom: 10px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--navy);
+    }
+
+    .confidence-pill {
+      display: inline-flex;
+      padding: 6px 11px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 0.88rem;
+      margin-bottom: 10px;
+    }
+
+    .confidence-high {
+      color: var(--success);
+      background: #e7f8f2;
+    }
+
+    .confidence-moderate {
+      color: var(--warn);
+      background: #fff4de;
+    }
+
+    .confidence-low {
+      color: var(--danger);
+      background: #fdebea;
+    }
+
+    .reference-card h3,
+    .trial-card h3,
+    .cache-card h3 {
+      font-size: 1rem;
+      margin-bottom: 8px;
+      color: var(--navy);
+    }
+
+    .reference-meta,
+    .trial-meta,
+    .cache-meta {
+      margin: 0 0 8px;
+      font-size: 0.92rem;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+
+    .reference-summary,
+    .highlight-list {
+      margin: 10px 0 0;
+      font-size: 0.94rem;
+      line-height: 1.6;
+    }
+
+    .highlight-chip {
+      display: inline-block;
+      margin: 6px 6px 0 0;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: #e2effc;
+      color: var(--navy);
+      font-size: 0.86rem;
+      line-height: 1.4;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .section-block {
+      display: grid;
+      gap: 12px;
+    }
+
+    .simple-answer {
+      display: none;
+      padding: 16px;
+      border-radius: 18px;
+      background: #ffffff;
+      border: 1px solid var(--line);
+    }
+
+    .simple-answer.active {
+      display: block;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 1120px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        max-height: none;
+      }
+
+      .result-section,
+      .composer-grid,
+      .filters {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="layout">
+    <aside class="card sidebar">
+      <div class="history-header">
+        <h2>Session History</h2>
+        <button id="clearHistoryButton" class="ghost-btn" type="button">Clear</button>
+      </div>
+      <div class="muted">Past questions and answers are saved in this browser session so follow-up questions can build on prior work.</div>
+      <div id="historyList" class="history-list"></div>
+      <div class="section-block">
+        <h2>Workspace Notes</h2>
+        <div class="muted">Use compare mode for head-to-head treatment questions, then export the result as a PDF report for lab or team review.</div>
+      </div>
+    </aside>
+
+    <section class="main">
+      <section class="card hero">
+        <div class="eyebrow">Clinical Evidence Workspace</div>
+        <h1>Medical Literature Research Agent</h1>
+        <p>Search PubMed, check ClinicalTrials.gov, reuse cached abstracts from ChromaDB, and generate evidence-based answers with confidence scoring, citations, and export-ready reporting.</p>
+      </section>
+
+      <section class="card composer">
+        <div class="composer-grid">
+          <div class="field">
+            <label for="question">Clinical question</label>
+            <textarea id="question" placeholder="Example: In adults with acute low back pain, do NSAIDs improve pain and function compared with acetaminophen?"></textarea>
+          </div>
+          <div class="field">
+            <label for="comparisonQuestion">Comparison question or treatment B</label>
+            <textarea id="comparisonQuestion" placeholder="Example: Compared with oral corticosteroids, does intratympanic steroid therapy improve hearing recovery in idiopathic sudden sensorineural hearing loss?"></textarea>
+          </div>
+        </div>
+
+        <div class="filters">
+          <div class="field">
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="standard">Standard synthesis</option>
+              <option value="compare">Compare two treatments</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="studyType">Study type</label>
+            <select id="studyType">
+              <option value="">Any study type</option>
+              <option value="clinical-trial">Clinical trial</option>
+              <option value="randomized-controlled-trial">Randomized controlled trial</option>
+              <option value="meta-analysis">Meta-analysis</option>
+              <option value="systematic-review">Systematic review</option>
+              <option value="review">Review</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="yearFrom">Year from</label>
+            <input id="yearFrom" type="number" min="1900" max="2100" placeholder="2022" />
+          </div>
+          <div class="field">
+            <label for="yearTo">Year to</label>
+            <input id="yearTo" type="number" min="1900" max="2100" placeholder="2026" />
+          </div>
+          <div class="field">
+            <label for="maxResults">PubMed papers</label>
+            <select id="maxResults">
+              <option value="3">3</option>
+              <option value="5" selected>5</option>
+              <option value="7">7</option>
+              <option value="10">10</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <label class="toggle"><input id="includeTrials" type="checkbox" checked /> Include ClinicalTrials.gov</label>
+          <div class="muted">Follow-up mode is automatic within the current browser session.</div>
+        </div>
+
+        <div class="actions">
+          <button id="runButton" class="primary-btn" type="button">Run research</button>
+          <button id="simplifyButton" class="secondary-btn" type="button" disabled>Simplify this answer</button>
+          <button id="exportButton" class="ghost-btn" type="button" disabled>Export PDF</button>
+          <div id="loading" class="inline-status">The agent is working through the evidence.</div>
+        </div>
+        <div id="error" class="error"></div>
+      </section>
+
+      <section id="results" class="results-grid hidden">
+        <section class="card results-panel">
+          <div class="panel-header">
+            <h2>Research Activity</h2>
+          </div>
+          <div id="activityList" class="activity-list"></div>
+        </section>
+
+        <section class="result-section">
+          <div class="card answer-card">
+            <div class="panel-header">
+              <h2>Synthesized Answer</h2>
+            </div>
+            <div id="answer" class="answer-content"></div>
+            <div id="simpleAnswer" class="simple-answer"></div>
+          </div>
+
+          <div class="card side-card">
+            <div class="panel-header">
+              <h2>Evidence Strength</h2>
+            </div>
+            <div id="confidenceBox"></div>
+            <div class="metric">
+              <strong>Session ID</strong>
+              <span id="sessionIdValue" class="muted"></span>
+            </div>
+            <div class="metric">
+              <strong>Filters used</strong>
+              <span id="filtersUsed" class="muted"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card results-panel">
+          <div class="panel-header">
+            <h2>References</h2>
+          </div>
+          <div id="references" class="reference-list"></div>
+        </section>
+
+        <section id="comparisonSection" class="card results-panel" style="display:none;">
+          <div class="panel-header">
+            <h2>Comparison References</h2>
+          </div>
+          <div id="comparisonReferences" class="reference-list"></div>
+        </section>
+
+        <section class="card results-panel">
+          <div class="panel-header">
+            <h2>Ongoing Trials</h2>
+          </div>
+          <div id="trials" class="trial-list"></div>
+        </section>
+
+        <section class="card results-panel">
+          <div class="panel-header">
+            <h2>Cached Related Abstracts</h2>
+          </div>
+          <div id="cachedMatches" class="cached-list"></div>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const questionInput = document.getElementById("question");
+    const comparisonInput = document.getElementById("comparisonQuestion");
+    const modeInput = document.getElementById("mode");
+    const studyTypeInput = document.getElementById("studyType");
+    const yearFromInput = document.getElementById("yearFrom");
+    const yearToInput = document.getElementById("yearTo");
+    const maxResultsInput = document.getElementById("maxResults");
+    const includeTrialsInput = document.getElementById("includeTrials");
+    const runButton = document.getElementById("runButton");
+    const simplifyButton = document.getElementById("simplifyButton");
+    const exportButton = document.getElementById("exportButton");
+    const clearHistoryButton = document.getElementById("clearHistoryButton");
+    const loading = document.getElementById("loading");
+    const errorBox = document.getElementById("error");
+    const results = document.getElementById("results");
+    const activityList = document.getElementById("activityList");
+    const answerBox = document.getElementById("answer");
+    const simpleAnswerBox = document.getElementById("simpleAnswer");
+    const confidenceBox = document.getElementById("confidenceBox");
+    const referencesBox = document.getElementById("references");
+    const comparisonSection = document.getElementById("comparisonSection");
+    const comparisonReferencesBox = document.getElementById("comparisonReferences");
+    const trialsBox = document.getElementById("trials");
+    const cachedMatchesBox = document.getElementById("cachedMatches");
+    const historyList = document.getElementById("historyList");
+    const sessionIdValue = document.getElementById("sessionIdValue");
+    const filtersUsed = document.getElementById("filtersUsed");
+
+    const HISTORY_KEY = "medical-literature-research-agent-history";
+    const SESSION_KEY = "medical-literature-research-agent-session-id";
+    let currentResult = null;
+
+    function getSessionId() {
+      let sessionId = localStorage.getItem(SESSION_KEY);
+      if (!sessionId) {
+        sessionId = crypto.randomUUID();
+        localStorage.setItem(SESSION_KEY, sessionId);
+      }
+      return sessionId;
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function nlToParagraphs(text) {
+      return escapeHtml(text)
+        .replace(/\[(\d+)\]/g, '<span class="citation">[$1]</span>')
+        .split(/\n{2,}/)
+        .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br />")}</p>`)
+        .join("");
+    }
+
+    function getHistory() {
+      try {
+        return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+      } catch {
+        return [];
+      }
+    }
+
+    function saveHistoryItem(item) {
+      const history = getHistory();
+      history.unshift(item);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 12)));
+      renderHistory();
+    }
+
+    function renderHistory() {
+      const history = getHistory();
+      if (!history.length) {
+        historyList.innerHTML = '<div class="history-empty">No saved questions yet.</div>';
+        return;
+      }
+
+      historyList.innerHTML = history.map((item, index) => `
+        <button type="button" class="history-item" data-index="${index}">
+          <strong>${escapeHtml(item.question)}</strong>
+          <p>${escapeHtml((item.answer || "").slice(0, 130))}${(item.answer || "").length > 130 ? "..." : ""}</p>
+        </button>
+      `).join("");
+
+      historyList.querySelectorAll(".history-item").forEach((button) => {
+        button.addEventListener("click", () => {
+          const historyItem = history[Number(button.dataset.index)];
+          questionInput.value = historyItem.question || "";
+          comparisonInput.value = historyItem.comparison_question || "";
+          modeInput.value = historyItem.mode || "standard";
+          renderResult(historyItem);
+        });
+      });
+    }
+
+    function renderActivity(items) {
+      activityList.innerHTML = (items || []).map((item) => `
+        <div class="activity-item">
+          <div class="activity-step">${escapeHtml(item.step || "step")}</div>
+          <div>${escapeHtml(item.detail || "")}</div>
+        </div>
+      `).join("");
+    }
+
+    function confidenceClass(label) {
+      const normalized = String(label || "").toLowerCase();
+      if (normalized === "high") return "confidence-high";
+      if (normalized === "moderate") return "confidence-moderate";
+      return "confidence-low";
+    }
+
+    function renderConfidence(confidence) {
+      if (!confidence) {
+        confidenceBox.innerHTML = '<div class="muted">No confidence score available.</div>';
+        return;
+      }
+      confidenceBox.innerHTML = `
+        <div class="confidence-pill ${confidenceClass(confidence.label)}">${escapeHtml(confidence.label || "Unknown")} confidence</div>
+        <div class="metric">
+          <strong>Score</strong>
+          <span>${escapeHtml(confidence.score ?? "NA")}</span>
+        </div>
+        <div class="metric">
+          <strong>Why this score</strong>
+          <span>${escapeHtml(confidence.rationale || "")}</span>
+        </div>
+        ${confidence.model_explanation ? `
+          <div class="metric">
+            <strong>Model evidence note</strong>
+            <span>${escapeHtml(confidence.model_explanation)}</span>
+          </div>
+        ` : ""}
+      `;
+    }
+
+    function renderReferences(items) {
+      if (!Array.isArray(items) || !items.length) {
+        return '<div class="reference-card"><p class="reference-meta">No references returned.</p></div>';
+      }
+
+      return items.map((item, index) => {
+        const authors = Array.isArray(item.authors) && item.authors.length ? item.authors.join(", ") : "Authors unavailable";
+        const highlights = Array.isArray(item.highlights) ? item.highlights : [];
+        return `
+          <article class="reference-card">
+            <h3>${index + 1}. ${escapeHtml(item.title || "Untitled article")}</h3>
+            <p class="reference-meta">${escapeHtml(authors)}</p>
+            <p class="reference-meta">${escapeHtml(item.journal || "Unknown journal")} ${item.year ? `(${escapeHtml(item.year)})` : ""}</p>
+            <p class="reference-meta">PMID: ${escapeHtml(item.pmid || "Unavailable")} ${item.study_type ? `| ${escapeHtml(item.study_type)}` : ""}</p>
+            ${item.summary ? `<div class="reference-summary"><strong>Abstract summary:</strong> ${escapeHtml(item.summary)}</div>` : ""}
+            ${highlights.length ? `<div class="highlight-list"><strong>Evidence highlights:</strong><br/>${highlights.map((highlight) => `<span class="highlight-chip">${escapeHtml(highlight)}</span>`).join("")}</div>` : ""}
+            ${item.link ? `<div class="reference-summary"><a href="${item.link}" target="_blank" rel="noopener noreferrer">View on PubMed</a></div>` : ""}
+          </article>
+        `;
+      }).join("");
+    }
+
+    function renderTrials(items) {
+      if (!Array.isArray(items) || !items.length) {
+        return '<div class="trial-card"><p class="trial-meta">No ongoing studies were returned.</p></div>';
+      }
+
+      return items.map((item) => `
+        <article class="trial-card">
+          <h3>${escapeHtml(item.title || "Untitled trial")}</h3>
+          <p class="trial-meta">NCT ID: ${escapeHtml(item.nct_id || "Unavailable")}</p>
+          <p class="trial-meta">Status: ${escapeHtml(item.status || "Unknown")} | Phase: ${escapeHtml(item.phase || "Unspecified")}</p>
+          <p class="trial-meta">Interventions: ${escapeHtml(item.interventions || "Unknown")}</p>
+          <a href="${item.link || "https://clinicaltrials.gov/"}" target="_blank" rel="noopener noreferrer">View trial</a>
+        </article>
+      `).join("");
+    }
+
+    function renderCached(items) {
+      if (!Array.isArray(items) || !items.length) {
+        return '<div class="cache-card"><p class="cache-meta">No similar cached abstracts yet.</p></div>';
+      }
+
+      return items.map((item) => `
+        <article class="cache-card">
+          <h3>${escapeHtml(item.title || "Cached abstract")}</h3>
+          <p class="cache-meta">${escapeHtml(item.journal || "Unknown journal")} ${item.year ? `(${escapeHtml(item.year)})` : ""}</p>
+          <p class="cache-meta">Similarity: ${escapeHtml(item.similarity ?? "NA")} ${item.study_type ? `| ${escapeHtml(item.study_type)}` : ""}</p>
+          ${item.link ? `<a href="${item.link}" target="_blank" rel="noopener noreferrer">Open source</a>` : ""}
+        </article>
+      `).join("");
+    }
+
+    function filtersLabel(result) {
+      const filters = result.filters || {};
+      const parts = [];
+      if (filters.year_from || filters.year_to) {
+        parts.push(`Years ${filters.year_from || "any"}-${filters.year_to || "any"}`);
+      }
+      if (filters.study_type) {
+        parts.push(filters.study_type);
+      }
+      if (result.mode === "compare") {
+        parts.push("Compare mode");
+      }
+      return parts.length ? parts.join(" | ") : "Default search";
+    }
+
+    function renderResult(result) {
+      currentResult = result;
+      results.classList.remove("hidden");
+      answerBox.innerHTML = nlToParagraphs(result.answer || "");
+      simpleAnswerBox.classList.remove("active");
+      simpleAnswerBox.innerHTML = "";
+      renderConfidence(result.confidence);
+      renderActivity(result.activity || []);
+      referencesBox.innerHTML = renderReferences(result.references || []);
+      trialsBox.innerHTML = renderTrials(result.trials || []);
+      cachedMatchesBox.innerHTML = renderCached(result.cached_matches || []);
+      sessionIdValue.textContent = result.session_id || getSessionId();
+      filtersUsed.textContent = filtersLabel(result);
+
+      if (result.mode === "compare" && Array.isArray(result.comparison_references) && result.comparison_references.length) {
+        comparisonSection.style.display = "grid";
+        comparisonReferencesBox.innerHTML = renderReferences(result.comparison_references);
+      } else {
+        comparisonSection.style.display = "none";
+        comparisonReferencesBox.innerHTML = "";
+      }
+
+      simplifyButton.disabled = !(result.answer || "").trim();
+      exportButton.disabled = !(result.answer || "").trim();
+    }
+
+    function setBusy(isBusy) {
+      runButton.disabled = isBusy;
+      simplifyButton.disabled = isBusy || !currentResult;
+      exportButton.disabled = isBusy || !currentResult;
+      loading.classList.toggle("active", isBusy);
+    }
+
+    function requestPayload() {
+      return {
+        question: questionInput.value.trim(),
+        comparison_question: comparisonInput.value.trim() || null,
+        mode: modeInput.value,
+        study_type: studyTypeInput.value,
+        year_from: yearFromInput.value ? Number(yearFromInput.value) : null,
+        year_to: yearToInput.value ? Number(yearToInput.value) : null,
+        max_results: Number(maxResultsInput.value),
+        include_trials: includeTrialsInput.checked,
+        session_id: getSessionId()
+      };
+    }
+
+    async function runResearch() {
+      const payload = requestPayload();
+      if (!payload.question) {
+        errorBox.textContent = "Please enter a clinical question.";
+        errorBox.classList.add("active");
+        return;
+      }
+      if (payload.mode === "compare" && !payload.comparison_question) {
+        errorBox.textContent = "Compare mode needs a second treatment or comparison question.";
+        errorBox.classList.add("active");
+        return;
+      }
+
+      errorBox.classList.remove("active");
+      results.classList.remove("hidden");
+      activityList.innerHTML = "";
+      setBusy(true);
+
+      try {
+        const response = await fetch("/api/research/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error("Unable to start the research stream.");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const liveActivity = [];
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary !== -1) {
+            const chunk = buffer.slice(0, boundary).trim();
+            buffer = buffer.slice(boundary + 2);
+            boundary = buffer.indexOf("\n\n");
+
+            if (!chunk.startsWith("data:")) continue;
+            const raw = chunk.slice(5).trim();
+            if (!raw) continue;
+            const event = JSON.parse(raw);
+
+            if (event.type === "activity") {
+              liveActivity.push(event.data);
+              renderActivity(liveActivity);
+            } else if (event.type === "result") {
+              renderResult(event.data);
+              saveHistoryItem({
+                question: payload.question,
+                comparison_question: payload.comparison_question,
+                answer: event.data.answer,
+                mode: event.data.mode,
+                references: event.data.references,
+                confidence: event.data.confidence,
+                session_id: event.data.session_id,
+                filters: event.data.filters,
+                activity: event.data.activity,
+                trials: event.data.trials,
+                cached_matches: event.data.cached_matches,
+                comparison_references: event.data.comparison_references
+              });
+            } else if (event.type === "error") {
+              throw new Error(event.data.message || "Research failed.");
+            }
+          }
+        }
+      } catch (error) {
+        errorBox.textContent = error.message || "Something went wrong while running the search.";
+        errorBox.classList.add("active");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function simplifyAnswer() {
+      if (!currentResult) return;
+      errorBox.classList.remove("active");
+      simplifyButton.disabled = true;
+
+      try {
+        const response = await fetch("/api/simplify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: currentResult.comparison_question
+              ? `${questionInput.value.trim()} vs ${comparisonInput.value.trim()}`
+              : questionInput.value.trim(),
+            answer: currentResult.answer
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || "Unable to simplify the answer.");
+        }
+        simpleAnswerBox.innerHTML = `<h3 style="margin-bottom:10px;color:var(--navy);">Patient-friendly version</h3>${nlToParagraphs(payload.simplified_answer || "")}`;
+        simpleAnswerBox.classList.add("active");
+      } catch (error) {
+        errorBox.textContent = error.message || "Simplification failed.";
+        errorBox.classList.add("active");
+      } finally {
+        simplifyButton.disabled = false;
+      }
+    }
+
+    async function exportPdf() {
+      if (!currentResult) return;
+      errorBox.classList.remove("active");
+      exportButton.disabled = true;
+
+      try {
+        const response = await fetch("/api/export/pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: currentResult.comparison_question
+              ? `${questionInput.value.trim()} vs ${comparisonInput.value.trim()}`
+              : questionInput.value.trim(),
+            answer: currentResult.answer,
+            confidence: currentResult.confidence,
+            references: currentResult.references,
+            trials: currentResult.trials
+          })
+        });
+        if (!response.ok) {
+          const payload = await response.json();
+          throw new Error(payload.detail || "PDF export failed.");
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = "medical-literature-report.pdf";
+        anchor.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        errorBox.textContent = error.message || "PDF export failed.";
+        errorBox.classList.add("active");
+      } finally {
+        exportButton.disabled = false;
+      }
+    }
+
+    clearHistoryButton.addEventListener("click", () => {
+      localStorage.removeItem(HISTORY_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      renderHistory();
+    });
+
+    runButton.addEventListener("click", runResearch);
+    simplifyButton.addEventListener("click", simplifyAnswer);
+    exportButton.addEventListener("click", exportPdf);
+    questionInput.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        runResearch();
+      }
+    });
+
+    renderHistory();
+  </script>
+</body>
+</html>
