@@ -23,7 +23,6 @@ Medical Literature Research Agent helps users explore medical evidence through a
 
 It also supports optional filters, treatment comparison, session-based follow-up questions, PDF export, and ongoing trial lookup from ClinicalTrials.gov.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Features
 
@@ -36,7 +35,6 @@ It also supports optional filters, treatment comparison, session-based follow-up
 - Export results as PDF
 - Include ongoing studies from ClinicalTrials.gov
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Built With
 
@@ -48,7 +46,6 @@ It also supports optional filters, treatment comparison, session-based follow-up
 - ClinicalTrials.gov API
 - ChromaDB
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Getting Started
 
@@ -75,20 +72,6 @@ GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=llama-3.1-8b-instant
 ```
 
-For Ollama:
-
-```bash
-LLM_PROVIDER=ollama
-OLLAMA_MODEL=llama3.1:8b
-```
-
-If using Ollama, start it first:
-
-```bash
-ollama pull llama3.1:8b
-ollama serve
-```
-
 ### Install dependencies
 
 ```bash
@@ -107,7 +90,6 @@ Open:
 http://127.0.0.1:8000
 ```
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Usage
 
@@ -117,7 +99,6 @@ http://127.0.0.1:8000
 4. Review the final answer, citations, and references.
 5. Optionally compare two treatments, simplify the answer, or export the results as a PDF.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Example Questions
 
@@ -126,7 +107,6 @@ http://127.0.0.1:8000
 - In children with acute otitis media, when is watchful waiting appropriate compared with immediate antibiotics?
 - Compare intratympanic steroids versus oral steroids for idiopathic sudden sensorineural hearing loss.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Project Structure
 
@@ -143,5 +123,3 @@ medical-literature-research-agent/
 ├── requirements.txt
 └── README.md
 ```
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
