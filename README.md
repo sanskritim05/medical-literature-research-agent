@@ -7,16 +7,6 @@
   </p>
 </div>
 
-## Table of Contents
-
-- [About](#about)
-- [Features](#features)
-- [Built With](#built-with)
-- [Getting Started](#getting-started)
-- [Usage](#usage)
-- [Example Questions](#example-questions)
-- [Project Structure](#project-structure)
-
 ## About
 
 Medical Literature Research Agent helps users explore medical evidence through a simple web interface. The user enters a clinical question in natural language, the app searches PubMed, retrieves abstracts, summarizes the findings, and produces a final answer with inline citations and linked references.
