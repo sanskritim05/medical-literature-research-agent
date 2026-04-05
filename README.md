@@ -54,27 +54,19 @@ For Ollama:
 LLM_PROVIDER=ollama
 OLLAMA_MODEL=llama3.1:8b
 ```
-
-3. If you use Ollama, start it first:
-
-```bash
-ollama pull llama3.1:8b
-ollama serve
-```
-
-4. Install dependencies:
+3. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-5. Run the app:
+4. Run the app:
 
 ```bash
 uvicorn main:app --reload
 ```
 
-6. Open:
+5. Open:
 
 ```text
 http://127.0.0.1:8000
