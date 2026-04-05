@@ -31,7 +31,7 @@ It also supports optional filters, treatment comparison, session-based follow-up
 - Python
 - FastAPI
 - LangGraph
-- Groq or Ollama
+- Groq 
 - PubMed Entrez API
 - ClinicalTrials.gov API
 - ChromaDB
