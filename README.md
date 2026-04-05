@@ -1,19 +1,44 @@
-# Medical Literature Research Agent
+<a id="readme-top"></a>
 
-Medical Literature Research Agent is a Python app that answers clinical questions using medical literature. The user enters a question in natural language, the app searches PubMed, fetches abstracts, summarizes the findings, and returns a final answer with citations.
+<div align="center">
+  <h1>Medical Literature Research Agent</h1>
+  <p>
+    A Python web app that answers clinical questions by searching PubMed, summarizing abstracts, and returning a final evidence-based answer with citations.
+  </p>
+</div>
+
+## Table of Contents
+
+- [About](#about)
+- [Features](#features)
+- [Built With](#built-with)
+- [Getting Started](#getting-started)
+- [Usage](#usage)
+- [Example Questions](#example-questions)
+- [Project Structure](#project-structure)
+
+## About
+
+Medical Literature Research Agent helps users explore medical evidence through a simple web interface. The user enters a clinical question in natural language, the app searches PubMed, retrieves abstracts, summarizes the findings, and produces a final answer with inline citations and linked references.
+
+It also supports optional filters, treatment comparison, session-based follow-up questions, PDF export, and ongoing trial lookup from ClinicalTrials.gov.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Features
 
 - Search PubMed using the free NCBI Entrez API
-- Optional ClinicalTrials.gov search for ongoing studies
+- Summarize abstracts and synthesize a final answer with citations
 - Filter by year range and study type
 - Compare two treatments or approaches
-- Follow-up questions in the same session
-- Confidence score for the evidence
-- PDF export
-- Simple web interface
+- Continue with follow-up questions in the same session
+- Show a confidence score for the evidence
+- Export results as PDF
+- Include ongoing studies from ClinicalTrials.gov
 
-## Tech Stack
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Built With
 
 - Python
 - FastAPI
@@ -23,22 +48,24 @@ Medical Literature Research Agent is a Python app that answers clinical question
 - ClinicalTrials.gov API
 - ChromaDB
 
-## Clone
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Getting Started
+
+### Clone the repository
 
 ```bash
 git clone https://github.com/sanskritim05/medical-literature-research-agent.git
 cd medical-literature-research-agent
 ```
 
-## Setup
-
-1. Create an environment file:
+### Create the environment file
 
 ```bash
 cp .env.example .env
 ```
 
-2. Add your model settings to `.env`.
+### Configure the model
 
 For Groq:
 
@@ -54,23 +81,43 @@ For Ollama:
 LLM_PROVIDER=ollama
 OLLAMA_MODEL=llama3.1:8b
 ```
-3. Install dependencies:
+
+If using Ollama, start it first:
+
+```bash
+ollama pull llama3.1:8b
+ollama serve
+```
+
+### Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Run the app:
+### Run the app
 
 ```bash
 uvicorn main:app --reload
 ```
 
-5. Open:
+Open:
 
 ```text
 http://127.0.0.1:8000
 ```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Usage
+
+1. Enter a clinical question.
+2. Optionally choose a study type or date range.
+3. Run the search.
+4. Review the final answer, citations, and references.
+5. Optionally compare two treatments, simplify the answer, or export the results as a PDF.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Example Questions
 
@@ -78,6 +125,8 @@ http://127.0.0.1:8000
 - For type 2 diabetes, do GLP-1 receptor agonists reduce cardiovascular events compared with standard care?
 - In children with acute otitis media, when is watchful waiting appropriate compared with immediate antibiotics?
 - Compare intratympanic steroids versus oral steroids for idiopathic sudden sensorineural hearing loss.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Project Structure
 
@@ -87,8 +136,12 @@ medical-literature-research-agent/
 ├── agent.py
 ├── pubmed_tool.py
 ├── frontend/
-│   └── index.html
+│   ├── index.html
+│   └── styles.css
 ├── .env.example
+├── .gitignore
 ├── requirements.txt
 └── README.md
 ```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
