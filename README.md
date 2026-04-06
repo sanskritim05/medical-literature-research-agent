@@ -73,9 +73,6 @@ It also supports optional filters, treatment comparison, session-based follow-up
 4. Review the final answer, inline citations, and linked references.
 5. Optionally compare two treatments, simplify the answer, or export results as a PDF.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
 
 <!-- EXAMPLE QUESTIONS -->
 ## Example Questions
