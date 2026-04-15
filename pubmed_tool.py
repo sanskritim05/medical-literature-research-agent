@@ -28,6 +28,57 @@ STUDY_TYPE_FILTERS = {
     "randomized-controlled-trial": '"Randomized Controlled Trial"[Publication Type]',
 }
 
+PUBMED_QUERY_STOPWORDS = {
+    "a",
+    "adults",
+    "an",
+    "and",
+    "are",
+    "compared",
+    "comparedwith",
+    "do",
+    "does",
+    "evidence",
+    "for",
+    "in",
+    "inform",
+    "is",
+    "of",
+    "on",
+    "or",
+    "the",
+    "there",
+    "to",
+    "use",
+    "what",
+    "with",
+}
+
+TRIAL_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "compared",
+    "comparedwith",
+    "care",
+    "do",
+    "does",
+    "evidence",
+    "for",
+    "in",
+    "is",
+    "major",
+    "of",
+    "on",
+    "or",
+    "standard",
+    "the",
+    "to",
+    "what",
+    "with",
+}
+
 
 class SimpleEmbeddingFunction(EmbeddingFunction[Documents]):
     def __call__(self, input: Documents) -> Embeddings:
@@ -153,6 +204,43 @@ def _build_pubmed_term(query: str, year_from: int | None = None, year_to: int | 
     return " AND ".join(clauses)
 
 
+def _normalize_pubmed_query(query: str) -> str:
+    cleaned = re.sub(r"[?.,:;()/]+", " ", query.lower())
+    cleaned = cleaned.replace("glp-1", "glp1")
+    tokens = re.findall(r"[a-z0-9+-]+", cleaned)
+    filtered = [token for token in tokens if token not in PUBMED_QUERY_STOPWORDS and len(token) > 2]
+
+    normalized_text = " ".join(filtered)
+    phrase_replacements = {
+        "atrial fibrillation": '"atrial fibrillation"',
+        "stroke prevention": '"stroke prevention"',
+        "acute low back pain": '"acute low back pain"',
+        "sudden sensorineural hearing loss": '"sudden sensorineural hearing loss"',
+        "type 2 diabetes": '"type 2 diabetes"',
+        "glp1 receptor agonists": '"GLP-1 receptor agonists"',
+        "glp1 receptor agonist": '"GLP-1 receptor agonist"',
+        "sglt2 inhibitors": '"SGLT2 inhibitors"',
+        "oral steroids": '"oral steroids"',
+        "oral corticosteroids": '"oral corticosteroids"',
+        "intratympanic steroids": '"intratympanic steroids"',
+        "apixaban": "apixaban",
+        "rivaroxaban": "rivaroxaban",
+        "semaglutide": "semaglutide",
+        "tirzepatide": "tirzepatide",
+    }
+
+    phrases: list[str] = []
+    for source, replacement in phrase_replacements.items():
+        if source in normalized_text:
+            phrases.append(replacement)
+            normalized_text = normalized_text.replace(source, " ")
+
+    remaining_tokens = [token for token in normalized_text.split() if token not in {"adults", "children"}]
+    compact = phrases + remaining_tokens[:6]
+    compact = [token for token in compact if token]
+    return " ".join(compact).strip() or query.strip()
+
+
 def _upsert_articles_in_cache(articles: list[dict[str, Any]]) -> None:
     if not articles:
         return
@@ -228,6 +316,35 @@ def search_cached_literature(query: str, max_results: int = 5) -> list[dict[str,
     return results
 
 
+def _normalize_trial_query(query: str) -> str:
+    cleaned = re.sub(r"[?.,:;()/]+", " ", query.lower())
+    cleaned = cleaned.replace("glp-1", "glp1")
+    tokens = re.findall(r"[a-z0-9+-]+", cleaned)
+    filtered = [token for token in tokens if token not in TRIAL_QUERY_STOPWORDS and len(token) > 2]
+
+    phrase_replacements = {
+        "type 2 diabetes": "type 2 diabetes",
+        "type 1 diabetes": "type 1 diabetes",
+        "acute low back pain": "acute low back pain",
+        "sudden sensorineural hearing loss": "sudden sensorineural hearing loss",
+        "glp1 receptor agonists": "glp-1 receptor agonist",
+        "glp1 receptor agonist": "glp-1 receptor agonist",
+        "cardiovascular events": "cardiovascular",
+    }
+
+    normalized_text = " ".join(filtered)
+    phrases: list[str] = []
+    for source, replacement in phrase_replacements.items():
+        if source in normalized_text:
+            phrases.append(replacement)
+            normalized_text = normalized_text.replace(source, " ")
+
+    remaining_tokens = [token for token in normalized_text.split() if token not in {"adults", "children"}]
+    compact = phrases + remaining_tokens[:6]
+    compact = [token for token in compact if token]
+    return " ".join(compact).strip() or query.strip()
+
+
 def search_pubmed(
     query: str,
     max_results: int = 5,
@@ -238,18 +355,29 @@ def search_pubmed(
     if not query or not query.strip():
         raise ValueError("Query must not be empty.")
 
-    esearch_params = {
-        "db": "pubmed",
-        "term": _build_pubmed_term(query, year_from=year_from, year_to=year_to, study_type=study_type),
-        "retmode": "xml",
-        "retmax": max_results,
-        "sort": "relevance",
-    }
-    esearch_response = requests.get(ESEARCH_URL, params=esearch_params, timeout=REQUEST_TIMEOUT)
-    esearch_response.raise_for_status()
+    candidate_queries: list[str] = []
+    normalized_query = _normalize_pubmed_query(query)
+    for candidate in [normalized_query, query.strip()]:
+        if candidate and candidate not in candidate_queries:
+            candidate_queries.append(candidate)
 
-    root = ET.fromstring(esearch_response.text)
-    pmids = [elem.text.strip() for elem in root.findall(".//IdList/Id") if elem.text]
+    pmids: list[str] = []
+    for candidate in candidate_queries:
+        esearch_params = {
+            "db": "pubmed",
+            "term": _build_pubmed_term(candidate, year_from=year_from, year_to=year_to, study_type=study_type),
+            "retmode": "xml",
+            "retmax": max_results,
+            "sort": "relevance",
+        }
+        esearch_response = requests.get(ESEARCH_URL, params=esearch_params, timeout=REQUEST_TIMEOUT)
+        esearch_response.raise_for_status()
+
+        root = ET.fromstring(esearch_response.text)
+        pmids = [elem.text.strip() for elem in root.findall(".//IdList/Id") if elem.text]
+        if pmids:
+            break
+
     if not pmids:
         return []
 
@@ -289,14 +417,29 @@ def search_clinical_trials(query: str, max_results: int = 3) -> list[dict[str, A
     if not query or not query.strip():
         return []
 
-    params = {
-        "query.term": query,
-        "pageSize": max_results,
-        "format": "json",
-    }
-    response = requests.get(CLINICAL_TRIALS_URL, params=params, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
-    payload = response.json()
+    candidate_queries = []
+    normalized_query = _normalize_trial_query(query)
+    for candidate in [normalized_query, query.strip()]:
+        if candidate and candidate not in candidate_queries:
+            candidate_queries.append(candidate)
+
+    payload = None
+    for candidate in candidate_queries:
+        params = {
+            "query.term": candidate,
+            "pageSize": max_results,
+            "format": "json",
+        }
+        response = requests.get(CLINICAL_TRIALS_URL, params=params, timeout=REQUEST_TIMEOUT)
+        if response.ok:
+            payload = response.json()
+            break
+        if response.status_code != 400:
+            response.raise_for_status()
+
+    if payload is None:
+        return []
+
     studies = payload.get("studies", [])
     results: list[dict[str, Any]] = []
     for study in studies:

@@ -38,7 +38,6 @@ It also supports optional filters, treatment comparison, session-based follow-up
 1. Clone the repo
    ```sh
    git clone https://github.com/sanskritim05/medical-literature-research-agent.git
-   cd medical-literature-research-agent
    ```
 2. Create the environment file
    ```sh
