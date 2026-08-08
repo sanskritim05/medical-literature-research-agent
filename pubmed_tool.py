@@ -1,16 +1,15 @@
 import hashlib
 import html
+import json
 import math
 import os
 import re
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
-import chromadb
 import requests
-from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
-from chromadb.config import Settings
 
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -18,7 +17,11 @@ EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 CLINICAL_TRIALS_URL = "https://clinicaltrials.gov/api/v2/studies"
 REQUEST_TIMEOUT = 20
 BASE_DIR = Path(__file__).resolve().parent
-CACHE_DIR = BASE_DIR / ".cache" / "chroma"
+# Vercel only allows writes under /tmp; local keeps a project .cache folder.
+CACHE_DIR = Path("/tmp/literature-cache") if os.getenv("VERCEL") else (BASE_DIR / ".cache" / "literature")
+CACHE_FILE = CACHE_DIR / "literature_cache.json"
+MAX_CACHE_ITEMS = 250
+_CACHE_LOCK = threading.Lock()
 
 STUDY_TYPE_FILTERS = {
     "clinical-trial": '"Clinical Trial"[Publication Type]',
@@ -80,39 +83,66 @@ TRIAL_QUERY_STOPWORDS = {
 }
 
 
-class SimpleEmbeddingFunction(EmbeddingFunction[Documents]):
-    def __call__(self, input: Documents) -> Embeddings:
-        return [self._embed_text(text) for text in input]
+def _embed_text(text: str, dims: int = 96) -> list[float]:
+    vector = [0.0] * dims
+    tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+    if not tokens:
+        return vector
 
-    @staticmethod
-    def _embed_text(text: str, dims: int = 96) -> list[float]:
-        vector = [0.0] * dims
-        tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
-        if not tokens:
-            return vector
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        slot = int(digest[:8], 16) % dims
+        sign = -1.0 if int(digest[8:10], 16) % 2 else 1.0
+        weight = 1.0 + (len(token) / 10.0)
+        vector[slot] += sign * weight
 
-        for token in tokens:
-            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-            slot = int(digest[:8], 16) % dims
-            sign = -1.0 if int(digest[8:10], 16) % 2 else 1.0
-            weight = 1.0 + (len(token) / 10.0)
-            vector[slot] += sign * weight
-
-        norm = math.sqrt(sum(value * value for value in vector)) or 1.0
-        return [value / norm for value in vector]
+    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+    return [value / norm for value in vector]
 
 
-def _get_collection():
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    return float(sum(a * b for a, b in zip(left, right)))
+
+
+def _ncbi_params(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = dict(extra or {})
+    api_key = os.getenv("NCBI_API_KEY", "").strip()
+    email = os.getenv("NCBI_EMAIL", "").strip()
+    tool = os.getenv("NCBI_TOOL", "medical-literature-research-agent").strip()
+    if api_key:
+        params["api_key"] = api_key
+    if email:
+        params["email"] = email
+    if tool:
+        params["tool"] = tool
+    return params
+
+
+def _load_cache() -> dict[str, Any]:
+    try:
+        if not CACHE_FILE.exists():
+            return {"items": {}}
+        with CACHE_FILE.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), dict):
+            return {"items": {}}
+        return payload
+    except Exception:
+        return {"items": {}}
+
+
+def _save_cache(payload: dict[str, Any]) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
-    client = chromadb.PersistentClient(
-        path=str(CACHE_DIR),
-        settings=Settings(anonymized_telemetry=False),
-    )
-    return client.get_or_create_collection(
-        name="literature_cache",
-        embedding_function=SimpleEmbeddingFunction(),
-    )
+    items = payload.get("items", {})
+    if len(items) > MAX_CACHE_ITEMS:
+        # Drop oldest entries when the ephemeral cache grows too large.
+        ordered = sorted(items.items(), key=lambda pair: pair[1].get("updated_at", 0))
+        items = dict(ordered[-MAX_CACHE_ITEMS:])
+        payload = {"items": items}
+    tmp_path = CACHE_FILE.with_suffix(".tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    tmp_path.replace(CACHE_FILE)
 
 
 def _clean_text(value: str) -> str:
@@ -245,75 +275,102 @@ def _upsert_articles_in_cache(articles: list[dict[str, Any]]) -> None:
     if not articles:
         return
 
-    collection = _get_collection()
-    ids = [f"pubmed:{article['pmid']}" for article in articles if article.get("pmid")]
-    documents = [article["abstract"] for article in articles if article.get("pmid")]
-    metadatas = []
-    for article in articles:
-        if not article.get("pmid"):
-            continue
-        metadatas.append(
-            {
-                "source": "pubmed",
-                "pmid": article.get("pmid", ""),
-                "title": article.get("title", ""),
-                "journal": article.get("journal", ""),
-                "year": article.get("year", ""),
-                "link": article.get("link", ""),
-                "study_type": article.get("study_type", ""),
-            }
-        )
-    if ids and documents and metadatas:
-        collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    try:
+        import time
+
+        with _CACHE_LOCK:
+            payload = _load_cache()
+            items = payload.setdefault("items", {})
+            now = time.time()
+            for article in articles:
+                pmid = str(article.get("pmid", "")).strip()
+                abstract = article.get("abstract", "")
+                if not pmid or not abstract:
+                    continue
+                items[f"pubmed:{pmid}"] = {
+                    "source": "pubmed",
+                    "pmid": pmid,
+                    "title": article.get("title", ""),
+                    "journal": article.get("journal", ""),
+                    "year": article.get("year", ""),
+                    "link": article.get("link", f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"),
+                    "study_type": article.get("study_type", ""),
+                    "abstract": abstract,
+                    "embedding": _embed_text(f"{article.get('title', '')} {abstract}"),
+                    "updated_at": now,
+                }
+            _save_cache(payload)
+    except Exception:
+        # Cache is best-effort on serverless; never fail the research request.
+        return
 
 
 def _lookup_cached_pubmed_articles(pmids: list[str]) -> dict[str, dict[str, Any]]:
     if not pmids:
         return {}
-    collection = _get_collection()
-    cached = collection.get(ids=[f"pubmed:{pmid}" for pmid in pmids], include=["documents", "metadatas"])
-    results: dict[str, dict[str, Any]] = {}
-    for cache_id, document, metadata in zip(cached.get("ids", []), cached.get("documents", []), cached.get("metadatas", [])):
-        pmid = str(metadata.get("pmid", "")).strip() or cache_id.split(":", 1)[-1]
-        results[pmid] = {
-            "source": "pubmed",
-            "pmid": pmid,
-            "title": metadata.get("title", ""),
-            "journal": metadata.get("journal", ""),
-            "year": metadata.get("year", ""),
-            "authors": [],
-            "abstract": document or "",
-            "publication_types": [metadata.get("study_type", "")] if metadata.get("study_type") else [],
-            "study_type": metadata.get("study_type", ""),
-            "link": metadata.get("link", f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"),
-            "cached": True,
-        }
-    return results
+    try:
+        with _CACHE_LOCK:
+            items = _load_cache().get("items", {})
+        results: dict[str, dict[str, Any]] = {}
+        for pmid in pmids:
+            item = items.get(f"pubmed:{pmid}")
+            if not item:
+                continue
+            results[pmid] = {
+                "source": "pubmed",
+                "pmid": pmid,
+                "title": item.get("title", ""),
+                "journal": item.get("journal", ""),
+                "year": item.get("year", ""),
+                "authors": [],
+                "abstract": item.get("abstract", ""),
+                "publication_types": [item.get("study_type", "")] if item.get("study_type") else [],
+                "study_type": item.get("study_type", ""),
+                "link": item.get("link", f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"),
+                "cached": True,
+            }
+        return results
+    except Exception:
+        return {}
 
 
 def search_cached_literature(query: str, max_results: int = 5) -> list[dict[str, Any]]:
-    collection = _get_collection()
-    response = collection.query(query_texts=[query], n_results=max_results, include=["documents", "metadatas", "distances"])
-    results: list[dict[str, Any]] = []
-    for document, metadata, distance in zip(
-        response.get("documents", [[]])[0],
-        response.get("metadatas", [[]])[0],
-        response.get("distances", [[]])[0],
-    ):
-        results.append(
-            {
-                "source": metadata.get("source", "pubmed"),
-                "pmid": metadata.get("pmid", ""),
-                "title": metadata.get("title", ""),
-                "journal": metadata.get("journal", ""),
-                "year": metadata.get("year", ""),
-                "study_type": metadata.get("study_type", ""),
-                "link": metadata.get("link", ""),
-                "abstract": document or "",
-                "similarity": round(1.0 - float(distance or 0.0), 3),
-            }
-        )
-    return results
+    try:
+        with _CACHE_LOCK:
+            items = list(_load_cache().get("items", {}).values())
+        if not items or not query.strip():
+            return []
+
+        query_embedding = _embed_text(query)
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for item in items:
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list) or not embedding:
+                embedding = _embed_text(f"{item.get('title', '')} {item.get('abstract', '')}")
+            similarity = _cosine_similarity(query_embedding, embedding)
+            if similarity <= 0.05:
+                continue
+            scored.append((similarity, item))
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        results: list[dict[str, Any]] = []
+        for similarity, item in scored[:max_results]:
+            results.append(
+                {
+                    "source": item.get("source", "pubmed"),
+                    "pmid": item.get("pmid", ""),
+                    "title": item.get("title", ""),
+                    "journal": item.get("journal", ""),
+                    "year": item.get("year", ""),
+                    "study_type": item.get("study_type", ""),
+                    "link": item.get("link", ""),
+                    "abstract": item.get("abstract", ""),
+                    "similarity": round(float(similarity), 3),
+                }
+            )
+        return results
+    except Exception:
+        return []
 
 
 def _normalize_trial_query(query: str) -> str:
@@ -363,13 +420,15 @@ def search_pubmed(
 
     pmids: list[str] = []
     for candidate in candidate_queries:
-        esearch_params = {
-            "db": "pubmed",
-            "term": _build_pubmed_term(candidate, year_from=year_from, year_to=year_to, study_type=study_type),
-            "retmode": "xml",
-            "retmax": max_results,
-            "sort": "relevance",
-        }
+        esearch_params = _ncbi_params(
+            {
+                "db": "pubmed",
+                "term": _build_pubmed_term(candidate, year_from=year_from, year_to=year_to, study_type=study_type),
+                "retmode": "xml",
+                "retmax": max_results,
+                "sort": "relevance",
+            }
+        )
         esearch_response = requests.get(ESEARCH_URL, params=esearch_params, timeout=REQUEST_TIMEOUT)
         esearch_response.raise_for_status()
 
@@ -386,12 +445,14 @@ def search_pubmed(
     fetched_articles: list[dict[str, Any]] = []
 
     if missing_pmids:
-        efetch_params = {
-            "db": "pubmed",
-            "id": ",".join(missing_pmids),
-            "retmode": "xml",
-            "rettype": "abstract",
-        }
+        efetch_params = _ncbi_params(
+            {
+                "db": "pubmed",
+                "id": ",".join(missing_pmids),
+                "retmode": "xml",
+                "rettype": "abstract",
+            }
+        )
         efetch_response = requests.get(EFETCH_URL, params=efetch_params, timeout=REQUEST_TIMEOUT)
         efetch_response.raise_for_status()
 

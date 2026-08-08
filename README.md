@@ -23,7 +23,8 @@ It also supports optional filters, treatment comparison, session-based follow-up
 * [![FastAPI][FastAPI.tiangolo.com]][FastAPI-url]
 * [![LangGraph][LangGraph]][LangGraph-url]
 * [![Groq][Groq.com]][Groq-url]
-* [![ChromaDB][ChromaDB]][ChromaDB-url]
+* [![Vercel][Vercel.com]][Vercel-url]
+* [![React][React.js]][React-url]
 
 
 <!-- GETTING STARTED -->
@@ -31,8 +32,8 @@ It also supports optional filters, treatment comparison, session-based follow-up
 
 ### Prerequisites
 
-* Python 3.8 or later
-* A [Groq API key](https://console.groq.com)
+* Python 3.10 or later
+* A [Groq API key](https://console.groq.com) (**required**)
 
 ### Installation
 
@@ -54,14 +55,50 @@ It also supports optional filters, treatment comparison, session-based follow-up
    ```sh
    pip install -r requirements.txt
    ```
-5. Start the app
+5. Install frontend dependencies and build (or run Vite in a second terminal)
+   ```sh
+   cd web && npm install && npm run build && cd ..
+   ```
+6. Start the app
    ```sh
    uvicorn main:app --reload
    ```
-6. Open in your browser
+7. Open in your browser
    ```text
    http://127.0.0.1:8000
    ```
+
+For UI hot reload during development, run `uvicorn main:app --reload` and `cd web && npm run dev` (Vite proxies `/api` to the backend).
+
+
+## Deploy on Vercel
+
+This app is configured for Vercel’s FastAPI runtime (`main.py` + `vercel.json`).
+
+1. Push the repo to GitHub and import it in [Vercel](https://vercel.com/new).
+2. In **Project Settings → Environment Variables**, add:
+
+   | Name | Required | Notes |
+   |------|----------|--------|
+   | `GROQ_API_KEY` | **Yes** | From [console.groq.com](https://console.groq.com) |
+   | `LLM_PROVIDER` | Recommended | Set to `groq` |
+   | `GROQ_MODEL` | Optional | Default `llama-3.1-8b-instant` |
+   | `NCBI_API_KEY` | Optional | Free NCBI key helps avoid PubMed rate limits on shared IPs |
+   | `NCBI_EMAIL` | Optional | Contact email for NCBI E-utilities etiquette |
+   | `LANGSMITH_API_KEY` | Optional | Only if you enable LangSmith tracing |
+
+3. Deploy. Research requests can take a while; `vercel.json` sets `maxDuration` to **300 seconds**.
+
+4. Or deploy from the CLI:
+   ```sh
+   npx vercel
+   ```
+   Then set the same env vars in the Vercel dashboard (or with `npx vercel env add`).
+
+**Notes**
+- Ollama is for local use only; do not set `LLM_PROVIDER=ollama` on Vercel.
+- PubMed + ClinicalTrials.gov need no paid keys.
+- Session memory is in-process (ephemeral on serverless). Browser history still works via `localStorage`.
 
 
 <!-- USAGE -->
@@ -91,9 +128,12 @@ medical-literature-research-agent/
 ├── main.py
 ├── agent.py
 ├── pubmed_tool.py
-├── frontend/
-│   ├── index.html
-│   └── styles.css
+├── web/                 # Evidentia React UI (Vite)
+│   ├── src/
+│   └── package.json
+├── public/              # Built frontend (npm run build)
+├── vercel.json
+├── runtime.txt
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
@@ -122,5 +162,7 @@ medical-literature-research-agent/
 [LangGraph-url]: https://github.com/langchain-ai/langgraph
 [Groq.com]: https://img.shields.io/badge/Groq-F55036?style=for-the-badge&logoColor=white
 [Groq-url]: https://groq.com
-[ChromaDB]: https://img.shields.io/badge/ChromaDB-E85D4A?style=for-the-badge&logoColor=white
-[ChromaDB-url]: https://www.trychroma.com
+[Vercel.com]: https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white
+[Vercel-url]: https://vercel.com
+[React.js]: https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB
+[React-url]: https://react.dev
