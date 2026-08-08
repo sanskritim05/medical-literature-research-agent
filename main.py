@@ -18,11 +18,13 @@ from agent import run_research, simplify_text
 
 
 BASE_DIR = Path(__file__).resolve().parent
-FRONTEND_DIR = BASE_DIR / "frontend"
+PUBLIC_DIR = BASE_DIR / "public"
 SESSION_MEMORY: dict[str, list[dict[str, str]]] = {}
 
 app = FastAPI(title="Medical Literature Research Agent")
-app.mount("/frontend", StaticFiles(directory=FRONTEND_DIR), name="frontend")
+
+if (PUBLIC_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=PUBLIC_DIR / "assets"), name="assets")
 
 
 class ResearchRequest(BaseModel):
@@ -71,7 +73,7 @@ def _run_research_with_activity(request: ResearchRequest) -> tuple[dict[str, Any
     history = _get_session_history(session_id)
 
     activity.append({"step": "context", "detail": "Loaded conversation history and prepared the research plan."})
-    activity.append({"step": "pubmed", "detail": "Searching PubMed with the selected filters and checking the local Chroma cache."})
+    activity.append({"step": "pubmed", "detail": "Searching PubMed with the selected filters and checking the literature cache."})
     if request.include_trials:
         activity.append({"step": "trials", "detail": "Pulling relevant ongoing studies from ClinicalTrials.gov."})
     if request.mode == "compare" and request.comparison_question:
@@ -168,7 +170,21 @@ def _build_pdf(request: PDFRequest) -> bytes:
 
 @app.get("/")
 async def serve_index() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html")
+    index_path = PUBLIC_DIR / "index.html"
+    if not index_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="Frontend not built yet. Run: cd web && npm install && npm run build",
+        )
+    return FileResponse(index_path)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    path = PUBLIC_DIR / "favicon.ico"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Favicon not found")
+    return FileResponse(path)
 
 
 @app.get("/health")
@@ -192,7 +208,7 @@ async def research_stream(request: ResearchRequest) -> StreamingResponse:
             session_id = request.session_id or str(uuid.uuid4())
             intro_events = [
                 {"type": "activity", "data": {"step": "context", "detail": "Loaded conversation memory and validated the request."}},
-                {"type": "activity", "data": {"step": "pubmed", "detail": "Searching PubMed and consulting the Chroma cache."}},
+                {"type": "activity", "data": {"step": "pubmed", "detail": "Searching PubMed and consulting the literature cache."}},
             ]
             if request.include_trials:
                 intro_events.append({"type": "activity", "data": {"step": "trials", "detail": "Retrieving ClinicalTrials.gov studies."}})

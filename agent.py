@@ -7,7 +7,6 @@ from typing import Any, TypedDict
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 
 from pubmed_tool import assess_confidence, extract_highlight_sentences, search_cached_literature, search_clinical_trials, search_pubmed
@@ -37,12 +36,18 @@ def _build_llm():
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 
     if provider == "ollama":
+        try:
+            from langchain_ollama import ChatOllama
+        except ImportError as exc:
+            raise RuntimeError(
+                "LLM_PROVIDER=ollama requires langchain-ollama. Install it locally or switch to groq for Vercel."
+            ) from exc
         model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         return ChatOllama(model=model, temperature=temperature)
 
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY is missing. Add it to your .env file or switch LLM_PROVIDER=ollama.")
+        raise RuntimeError("GROQ_API_KEY is missing. Add it to your .env file or Vercel environment variables.")
 
     model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
     return ChatGroq(groq_api_key=api_key, model_name=model, temperature=temperature)
