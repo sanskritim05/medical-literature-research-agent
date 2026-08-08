@@ -3,7 +3,8 @@
   "buildCommand": "cd web && npm install && npm run build",
   "functions": {
     "main.py": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "frontend_dist/**"
     }
   }
 }

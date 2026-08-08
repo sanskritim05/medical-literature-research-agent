@@ -87,9 +87,10 @@ This app is configured for Vercel’s FastAPI runtime (`main.py` + `vercel.json`
    | `NCBI_EMAIL` | Optional | Contact email for NCBI E-utilities etiquette |
    | `LANGSMITH_API_KEY` | Optional | Only if you enable LangSmith tracing |
 
-3. Deploy. Research requests can take a while; `vercel.json` sets `maxDuration` to **300 seconds**.
+3. Leave **Output Directory** blank in Vercel project settings (do not set it to `public`).
+4. Deploy. Research requests can take a while; `vercel.json` sets `maxDuration` to **300 seconds**.
 
-4. Or deploy from the CLI:
+5. Or deploy from the CLI:
    ```sh
    npx vercel
    ```
@@ -131,7 +132,7 @@ medical-literature-research-agent/
 ├── web/                 # Evidentia React UI (Vite)
 │   ├── src/
 │   └── package.json
-├── public/              # Built frontend (npm run build)
+├── frontend_dist/       # Built frontend (npm run build)
 ├── vercel.json
 ├── runtime.txt
 ├── .env.example
