@@ -18,13 +18,13 @@ from agent import run_research, simplify_text
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PUBLIC_DIR = BASE_DIR / "public"
+FRONTEND_DIR = BASE_DIR / "frontend_dist"
 SESSION_MEMORY: dict[str, list[dict[str, str]]] = {}
 
 app = FastAPI(title="Medical Literature Research Agent")
 
-if (PUBLIC_DIR / "assets").exists():
-    app.mount("/assets", StaticFiles(directory=PUBLIC_DIR / "assets"), name="assets")
+if (FRONTEND_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
 
 
 class ResearchRequest(BaseModel):
@@ -170,7 +170,7 @@ def _build_pdf(request: PDFRequest) -> bytes:
 
 @app.get("/")
 async def serve_index() -> FileResponse:
-    index_path = PUBLIC_DIR / "index.html"
+    index_path = FRONTEND_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(
             status_code=503,
@@ -181,7 +181,7 @@ async def serve_index() -> FileResponse:
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> FileResponse:
-    path = PUBLIC_DIR / "favicon.ico"
+    path = FRONTEND_DIR / "favicon.ico"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Favicon not found")
     return FileResponse(path)

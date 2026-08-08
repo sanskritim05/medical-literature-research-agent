@@ -1,0 +1,5 @@
+[tool.vercel]
+entrypoint = "main:app"
+
+[tool.vercel.scripts]
+build = "cd web && npm install && npm run build"
