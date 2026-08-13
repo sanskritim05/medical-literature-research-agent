@@ -14,5 +14,5 @@ env/
 ENV/
 .vercel/
 web/node_modules/
-
-
+frontend_dist/
+public/

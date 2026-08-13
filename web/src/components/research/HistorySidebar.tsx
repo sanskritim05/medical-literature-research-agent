@@ -12,21 +12,21 @@ interface Props {
 
 export function HistorySidebar({ history, sessionId, activeAt, onSelect, onClear }: Props) {
   return (
-    <aside className="panel sticky top-6 flex max-h-[calc(100vh-3rem)] flex-col p-4">
-      <div className="flex items-center justify-between">
-        <span className="label-caps flex items-center gap-1.5">
-          <History className="h-3.5 w-3.5" /> Recent questions
+    <aside className="panel sidebar">
+      <div className="sidebar-top">
+        <span className="label-caps">
+          <History className="icon-sm" /> Recent questions
         </span>
         {history.length > 0 && (
-          <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={onClear}>
-            <Trash2 className="h-3 w-3" /> Clear
+          <Button variant="ghost" size="sm" onClick={onClear}>
+            <Trash2 className="icon-sm" /> Clear
           </Button>
         )}
       </div>
 
-      <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+      <div className="history-list">
         {history.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="history-empty">
             Your last 12 questions are kept in this browser so you can revisit results instantly.
           </p>
         ) : (
@@ -35,14 +35,10 @@ export function HistorySidebar({ history, sessionId, activeAt, onSelect, onClear
               key={h.createdAt}
               type="button"
               onClick={() => onSelect(h)}
-              className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${
-                activeAt === h.createdAt
-                  ? "border-primary bg-accent/50"
-                  : "border-border bg-surface hover:border-ring"
-              }`}
+              className={`history-item${activeAt === h.createdAt ? " active" : ""}`}
             >
-              <p className="line-clamp-3 text-sm leading-snug">{h.question}</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p>{h.question}</p>
+              <p className="meta">
                 {new Date(h.createdAt).toLocaleString()} ·{" "}
                 {h.mode === "compare" ? "Compare" : "Standard"} · {h.references.length} refs
               </p>
@@ -51,9 +47,7 @@ export function HistorySidebar({ history, sessionId, activeAt, onSelect, onClear
         )}
       </div>
 
-      <p className="mt-3 border-t border-border pt-3 font-mono text-[11px] text-muted-foreground">
-        session {sessionId.slice(0, 12)}
-      </p>
+      <p className="session-foot">session {sessionId.slice(0, 12)}</p>
     </aside>
   );
 }

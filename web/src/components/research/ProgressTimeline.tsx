@@ -9,37 +9,33 @@ export interface Step {
 
 export function ProgressTimeline({ steps }: { steps: Step[] }) {
   return (
-    <section className="panel p-5 sm:p-6">
-      <div className="mb-4 flex items-center gap-2">
-        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-        <span className="font-serif text-lg">Tracing through the evidence…</span>
+    <section className="panel progress">
+      <div className="progress-title">
+        <Loader2 className="icon spin text-primary" />
+        <span>Tracing through the evidence…</span>
       </div>
-      <ol className="space-y-3">
+      <ol className="progress-list">
         {steps.map((s) => (
-          <li key={s.id} className="flex items-start gap-3">
-            <span className="mt-0.5">
+          <li key={s.id} className="progress-item">
+            <span>
               {s.state === "done" ? (
-                <Check className="h-4 w-4 text-signal" />
+                <Check className="icon text-signal" />
               ) : s.state === "active" ? (
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <Loader2 className="icon spin text-primary" />
               ) : (
-                <Circle className="h-4 w-4 text-muted-foreground/40" />
+                <Circle className="icon text-muted-soft" />
               )}
             </span>
-            <div className="min-w-0">
+            <div>
               <p
-                className={`text-sm font-medium ${
-                  s.state === "pending" || s.state === "skipped"
-                    ? "text-muted-foreground"
-                    : "text-foreground"
+                className={`progress-label${
+                  s.state === "pending" || s.state === "skipped" ? " pending" : ""
                 }`}
               >
                 {s.label}
-                {s.state === "skipped" && (
-                  <span className="ml-2 text-xs text-muted-foreground">skipped</span>
-                )}
+                {s.state === "skipped" && <span className="skip-tag">skipped</span>}
               </p>
-              <p className="text-xs text-muted-foreground">{s.detail}</p>
+              <p className="progress-detail">{s.detail}</p>
             </div>
           </li>
         ))}
