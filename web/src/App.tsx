@@ -118,7 +118,6 @@ export default function App() {
             mark("done", "done", activity.detail);
             return;
           }
-          // Mark prior pending steps done once a later step becomes active.
           setSteps((prev) => {
             if (!prev) return prev;
             const activeIndex = prev.findIndex((s) => s.id === activity.step);
@@ -197,15 +196,15 @@ export default function App() {
   }, [result]);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-5 py-5 sm:px-8">
-          <span className="flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Stethoscope className="h-5 w-5" />
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <span className="brand-mark">
+            <Stethoscope className="icon-md" />
           </span>
-          <div className="min-w-0">
-            <h1 className="font-serif text-2xl leading-none">Evidentia</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+          <div className="brand-copy">
+            <h1 className="brand-title">Evidentia</h1>
+            <p className="brand-subtitle">
               Ask a clinical question. We search PubMed and ClinicalTrials.gov, then synthesize a
               cited, confidence-rated answer.
             </p>
@@ -213,8 +212,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-7xl gap-6 px-5 py-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="space-y-6">
+      <main className="app-main">
+        <div className="stack">
           <Composer
             question={question}
             setQuestion={setQuestion}
@@ -229,11 +228,8 @@ export default function App() {
           />
 
           {error && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-            >
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div role="alert" className="alert-error">
+              <AlertTriangle className="icon" style={{ marginTop: "0.125rem" }} />
               <span>{error}</span>
             </div>
           )}
@@ -241,10 +237,10 @@ export default function App() {
           {steps && <ProgressTimeline steps={steps} />}
 
           {!result && !steps && (
-            <section className="panel flex flex-col items-center gap-2 px-6 py-14 text-center">
-              <BookOpen className="h-6 w-6 text-muted-foreground" />
-              <h2 className="font-serif text-xl">No results yet</h2>
-              <p className="max-w-md text-sm text-muted-foreground">
+            <section className="panel empty-state">
+              <BookOpen className="icon-lg muted" />
+              <h2>No results yet</h2>
+              <p>
                 Ask a PICO-style question above. Each answer comes with numbered references you can
                 trace back to the original abstracts.
               </p>
@@ -262,18 +258,20 @@ export default function App() {
                 onExport={() => exportResultPdf(result)}
               />
 
-              <section className="space-y-3">
-                <h3 className="font-serif text-lg">References</h3>
+              <section className="stack-sm">
+                <h3 className="section-title">References</h3>
                 {result.references.length === 0 ? (
                   <EmptyNote>No references matched this question and filter set.</EmptyNote>
                 ) : (
-                  result.references.map((r) => <ReferenceCard key={`${r.pmid}-${r.index}`} reference={r} />)
+                  result.references.map((r) => (
+                    <ReferenceCard key={`${r.pmid}-${r.index}`} reference={r} />
+                  ))
                 )}
               </section>
 
               {result.mode === "compare" && (
-                <section className="space-y-3">
-                  <h3 className="font-serif text-lg">Comparison references</h3>
+                <section className="stack-sm">
+                  <h3 className="section-title">Comparison references</h3>
                   {result.comparisonReferences.length === 0 ? (
                     <EmptyNote>No comparison references were found.</EmptyNote>
                   ) : (
@@ -284,8 +282,8 @@ export default function App() {
                 </section>
               )}
 
-              <section className="space-y-3">
-                <h3 className="font-serif text-lg">Ongoing clinical trials</h3>
+              <section className="stack-sm">
+                <h3 className="section-title">Ongoing clinical trials</h3>
                 {result.trials.length === 0 ? (
                   <EmptyNote>
                     No ongoing trials to show. Either none matched or trials were excluded.
@@ -295,8 +293,8 @@ export default function App() {
                 )}
               </section>
 
-              <section className="space-y-3">
-                <h3 className="font-serif text-lg">Similar cached abstracts</h3>
+              <section className="stack-sm">
+                <h3 className="section-title">Similar cached abstracts</h3>
                 {result.cached.length === 0 ? (
                   <EmptyNote>No similar abstracts from earlier searches yet.</EmptyNote>
                 ) : (
@@ -304,15 +302,15 @@ export default function App() {
                 )}
               </section>
 
-              <section className="panel px-5 py-4 text-xs text-muted-foreground">
+              <section className="panel overview-panel">
                 <span className="label-caps">Search overview</span>
-                <p className="mt-1.5">{filterSummary}</p>
-                <p className="mt-1 font-mono">session {result.sessionId}</p>
+                <p>{filterSummary}</p>
+                <p className="mono">session {result.sessionId}</p>
               </section>
             </>
           )}
 
-          <p className="rounded-md border border-caution/40 bg-caution/10 px-4 py-3 text-xs leading-5 text-foreground/80">
+          <p className="alert-caution">
             <strong>Medical disclaimer:</strong> Evidentia summarizes published literature using AI
             and is for informational and research purposes only. It is not medical advice,
             diagnosis, or treatment, and it may miss or misread evidence. Always verify against the

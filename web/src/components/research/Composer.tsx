@@ -2,13 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select } from "@/components/ui/select";
 import { Loader2, Microscope, Sparkles } from "lucide-react";
 import type { Filters, Mode, StudyType } from "@/lib/research-types";
 
@@ -53,20 +47,16 @@ export function Composer({
   onRun,
 }: Props) {
   return (
-    <section className="panel p-5 sm:p-6">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <section className="panel composer">
+      <div className="composer-top">
         <span className="label-caps">Clinical question</span>
-        <div className="flex rounded-md border border-border bg-muted p-0.5">
+        <div className="mode-toggle">
           {(["standard", "compare"] as Mode[]).map((m) => (
             <button
               key={m}
               type="button"
               onClick={() => setMode(m)}
-              className={`rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors ${
-                mode === m
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
+              className={`mode-btn${mode === m ? " active" : ""}`}
             >
               {m === "standard" ? "Standard" : "Compare treatments"}
             </button>
@@ -81,37 +71,31 @@ export function Composer({
           if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onRun();
         }}
         placeholder="Ask a PICO-style question: population, intervention, comparison, outcome..."
-        className="min-h-[120px] resize-y bg-card text-base leading-relaxed"
       />
 
       {mode === "compare" && (
-        <div className="mt-3">
+        <div className="field" style={{ marginTop: "0.75rem" }}>
           <span className="label-caps">Comparison question</span>
           <Textarea
+            compare
             value={compareQuestion}
             onChange={(e) => setCompareQuestion(e.target.value)}
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onRun();
             }}
             placeholder="e.g. In the same population, how effective is duloxetine?"
-            className="mt-1.5 min-h-[90px] resize-y bg-card"
           />
         </div>
       )}
 
       {!question && (
-        <div className="mt-4 space-y-2">
-          <span className="label-caps flex items-center gap-1.5">
-            <Sparkles className="h-3 w-3" /> Try an example
+        <div className="examples">
+          <span className="label-caps">
+            <Sparkles className="icon-sm" /> Try an example
           </span>
-          <div className="grid gap-2">
+          <div className="example-grid">
             {EXAMPLES.map((ex) => (
-              <button
-                key={ex}
-                type="button"
-                onClick={() => setQuestion(ex)}
-                className="rounded-md border border-border bg-surface px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
-              >
+              <button key={ex} type="button" onClick={() => setQuestion(ex)} className="example-btn">
                 {ex}
               </button>
             ))}
@@ -119,68 +103,46 @@ export function Composer({
         </div>
       )}
 
-      <div className="mt-5 grid gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
+      <div className="filter-grid">
+        <div className="field">
           <span className="label-caps">Study type</span>
           <Select
             value={filters.studyType}
-            onValueChange={(v) => setFilters({ ...filters, studyType: v as StudyType })}
-          >
-            <SelectTrigger className="mt-1.5 bg-card">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {STUDY_TYPES.map((s) => (
-                <SelectItem key={s.value} value={s.value}>
-                  {s.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={(e) => setFilters({ ...filters, studyType: e.target.value as StudyType })}
+            options={STUDY_TYPES}
+          />
         </div>
-        <div>
+        <div className="field">
           <span className="label-caps">Publication years</span>
-          <div className="mt-1.5 flex items-center gap-2">
+          <div className="year-row">
             <Input
               inputMode="numeric"
               placeholder="From"
               value={filters.yearFrom}
               onChange={(e) => setFilters({ ...filters, yearFrom: e.target.value.slice(0, 4) })}
-              className="bg-card"
             />
-            <span className="text-muted-foreground">-</span>
+            <span className="muted">-</span>
             <Input
               inputMode="numeric"
               placeholder="To"
               value={filters.yearTo}
               onChange={(e) => setFilters({ ...filters, yearTo: e.target.value.slice(0, 4) })}
-              className="bg-card"
             />
           </div>
         </div>
-        <div>
+        <div className="field">
           <span className="label-caps">Max papers</span>
           <Select
             value={String(filters.maxPapers)}
-            onValueChange={(v) => setFilters({ ...filters, maxPapers: Number(v) })}
-          >
-            <SelectTrigger className="mt-1.5 bg-card">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {[3, 5, 7, 10].map((n) => (
-                <SelectItem key={n} value={String(n)}>
-                  {n} papers
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={(e) => setFilters({ ...filters, maxPapers: Number(e.target.value) })}
+            options={[3, 5, 7, 10].map((n) => ({ value: String(n), label: `${n} papers` }))}
+          />
         </div>
-        <div className="flex items-end">
-          <label className="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2.5">
-            <span className="text-sm">
+        <div style={{ display: "flex", alignItems: "flex-end" }}>
+          <label className="trials-toggle">
+            <span>
               Ongoing trials
-              <span className="block text-xs text-muted-foreground">ClinicalTrials.gov</span>
+              <small>ClinicalTrials.gov</small>
             </span>
             <Switch
               checked={filters.includeTrials}
@@ -190,12 +152,12 @@ export function Composer({
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <Button size="lg" onClick={onRun} disabled={busy} className="gap-2">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Microscope className="h-4 w-4" />}
+      <div className="composer-actions">
+        <Button size="lg" onClick={onRun} disabled={busy}>
+          {busy ? <Loader2 className="icon spin" /> : <Microscope className="icon" />}
           {busy ? "Researching…" : "Run Research"}
         </Button>
-        <span className="text-xs text-muted-foreground">
+        <span className="muted" style={{ fontSize: "0.75rem" }}>
           ⌘/Ctrl + Enter · searches PubMed, then synthesizes with citations
         </span>
       </div>

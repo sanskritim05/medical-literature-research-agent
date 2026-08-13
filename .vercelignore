@@ -9,4 +9,3 @@ __pycache__
 .ruff_cache
 .git
 web/node_modules
-frontend

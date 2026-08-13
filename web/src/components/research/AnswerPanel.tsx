@@ -11,7 +11,7 @@ function CitedText({ text }: { text: string }) {
         const m = part.match(/^\[(\d+(?:\s*,\s*\d+)*)\]$/);
         if (!m) return <span key={i}>{part}</span>;
         return (
-          <span key={i} className="inline-flex gap-0.5 align-baseline">
+          <span key={i} className="cite-group">
             {m[1]!.split(",").map((n) => {
               const num = n.trim();
               return (
@@ -24,7 +24,7 @@ function CitedText({ text }: { text: string }) {
                       .getElementById(`ref-${num}`)
                       ?.scrollIntoView({ behavior: "smooth", block: "center" });
                   }}
-                  className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-primary/30 bg-accent px-1.5 font-mono text-[11px] font-semibold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+                  className="cite-chip"
                 >
                   {num}
                 </a>
@@ -40,16 +40,16 @@ function CitedText({ text }: { text: string }) {
 function ConfidencePill({ level, score }: { level: string; score: number }) {
   const tone =
     level === "High"
-      ? "border-signal/40 bg-signal/12 text-signal"
+      ? "confidence-high"
       : level === "Moderate"
-        ? "border-caution/50 bg-caution/15 text-caution"
-        : "border-destructive/40 bg-destructive/10 text-destructive";
+        ? "confidence-moderate"
+        : "confidence-low";
   return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${tone}`}
-    >
+    <span className={`confidence-pill ${tone}`}>
       {level} confidence
-      <span className="font-mono opacity-80">{score}/100</span>
+      <span className="mono" style={{ opacity: 0.8 }}>
+        {score}/100
+      </span>
     </span>
   );
 }
@@ -66,37 +66,36 @@ interface Props {
 export function AnswerPanel({ result, busy, simplifying, exporting, onSimplify, onExport }: Props) {
   const { synthesis } = result;
   return (
-    <section className="panel overflow-hidden">
-      <div className="border-b border-border bg-surface px-5 py-4 sm:px-6">
+    <section className="panel answer-panel">
+      <div className="answer-header">
         <span className="label-caps">Synthesized answer</span>
-        <h2 className="mt-1 font-serif text-xl leading-snug">{result.question}</h2>
+        <h2>{result.question}</h2>
         {result.compareQuestion && (
-          <p className="mt-1 text-sm text-muted-foreground">
-            Compared against: {result.compareQuestion}
-          </p>
+          <p className="compare-note">Compared against: {result.compareQuestion}</p>
         )}
-        <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="confidence-row">
           <ConfidencePill level={synthesis.confidence.level} score={synthesis.confidence.score} />
-          <p className="max-w-2xl text-xs text-muted-foreground">
-            {withoutEmDashes(synthesis.confidence.rationale)}
-          </p>
+          <p>{withoutEmDashes(synthesis.confidence.rationale)}</p>
         </div>
       </div>
 
-      <div className="space-y-4 px-5 py-5 sm:px-6">
-        {synthesis.answer.split(/\n{1,}/).filter(Boolean).map((para, i) => (
-          <p key={i} className="text-[15px] leading-7">
-            <CitedText text={para} />
-          </p>
-        ))}
+      <div className="answer-body">
+        {synthesis.answer
+          .split(/\n{1,}/)
+          .filter(Boolean)
+          .map((para, i) => (
+            <p key={i}>
+              <CitedText text={para} />
+            </p>
+          ))}
 
         {synthesis.key_takeaways.length > 0 && (
-          <div className="rounded-md border border-border bg-surface p-4">
+          <div className="info-box">
             <span className="label-caps">Key takeaways</span>
-            <ul className="mt-2 space-y-1.5">
+            <ul className="takeaway-list">
               {synthesis.key_takeaways.map((t, i) => (
-                <li key={i} className="flex gap-2 text-sm leading-6">
-                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                <li key={i}>
+                  <span className="takeaway-dot" />
                   <span>
                     <CitedText text={t} />
                   </span>
@@ -107,36 +106,37 @@ export function AnswerPanel({ result, busy, simplifying, exporting, onSimplify, 
         )}
 
         {synthesis.plain_language_summary && (
-          <div className="rounded-md border border-accent bg-accent/40 p-4">
+          <div className="info-box accent">
             <span className="label-caps">Plain-language summary</span>
-            <p className="mt-1.5 text-sm leading-6">{withoutEmDashes(synthesis.plain_language_summary)}</p>
+            <p style={{ margin: "0.375rem 0 0", fontSize: "0.875rem", lineHeight: 1.5 }}>
+              {withoutEmDashes(synthesis.plain_language_summary)}
+            </p>
           </div>
         )}
 
         {result.simplified && (
-          <div className="rounded-md border border-primary/25 bg-card p-4">
+          <div className="info-box primary">
             <span className="label-caps">Simplified for patients</span>
-            <div className="mt-2 space-y-2">
-              {result.simplified.split(/\n+/).filter(Boolean).map((p, i) => (
-                <p key={i} className="text-sm leading-6">
-                  {withoutEmDashes(p)}
-                </p>
-              ))}
+            <div style={{ marginTop: "0.5rem", display: "grid", gap: "0.5rem" }}>
+              {result.simplified
+                .split(/\n+/)
+                .filter(Boolean)
+                .map((p, i) => (
+                  <p key={i} style={{ margin: 0, fontSize: "0.875rem", lineHeight: 1.5 }}>
+                    {withoutEmDashes(p)}
+                  </p>
+                ))}
             </div>
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2 border-t border-border pt-4">
-          <Button variant="outline" onClick={onSimplify} disabled={busy || simplifying} className="gap-2">
-            {simplifying ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <WandSparkles className="h-4 w-4" />
-            )}
+        <div className="answer-actions">
+          <Button variant="outline" onClick={onSimplify} disabled={busy || simplifying}>
+            {simplifying ? <Loader2 className="icon spin" /> : <WandSparkles className="icon" />}
             Simplify this answer
           </Button>
-          <Button variant="outline" onClick={onExport} disabled={busy || exporting} className="gap-2">
-            <FileDown className="h-4 w-4" />
+          <Button variant="outline" onClick={onExport} disabled={busy || exporting}>
+            <FileDown className="icon" />
             Export PDF
           </Button>
         </div>
