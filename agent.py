@@ -1,7 +1,9 @@
 import json
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from typing import Any, TypedDict
 
 from dotenv import load_dotenv
@@ -9,7 +11,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from langgraph.graph import END, START, StateGraph
 
-from pubmed_tool import assess_confidence, extract_highlight_sentences, search_cached_literature, search_clinical_trials, search_pubmed
+from pubmed_tool import (
+    _normalize_pubmed_query,
+    assess_confidence,
+    extract_highlight_sentences,
+    search_cached_literature,
+    search_clinical_trials,
+    search_pubmed,
+)
 
 
 load_dotenv()
@@ -28,7 +37,14 @@ class ResearchState(TypedDict, total=False):
     cached_matches: list[dict[str, Any]]
     trials: list[dict[str, Any]]
     comparison_trials: list[dict[str, Any]]
+    query_plan: dict[str, Any]
+    comparison_query_plan: dict[str, Any]
+    article_summaries: list[dict[str, str]]
     synthesis: dict[str, Any]
+
+
+MAX_ARTICLE_SUMMARIES = int(os.getenv("MAX_ARTICLE_SUMMARIES", "4"))
+RETRIEVAL_CANDIDATES = int(os.getenv("RETRIEVAL_CANDIDATES", "15"))
 
 
 def _build_llm():
@@ -53,6 +69,31 @@ def _build_llm():
     return ChatGroq(groq_api_key=api_key, model_name=model, temperature=temperature)
 
 
+def _retry_delay_seconds(exc: Exception, attempt: int) -> float:
+    match = re.search(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)s", str(exc), flags=re.IGNORECASE)
+    if match:
+        minutes = int(match.group(1) or 0)
+        seconds = float(match.group(2) or 0)
+        return min(minutes * 60 + seconds + 3, 20 * 60)
+    return float(2 ** attempt)
+
+
+def _invoke_llm(messages: list[Any]) -> Any:
+    llm = _build_llm()
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            return llm.invoke(messages)
+        except Exception as exc:
+            last_error = exc
+            message = str(exc).lower()
+            retryable = any(token in message for token in ("429", "rate limit", "503", "over capacity"))
+            if not retryable or attempt == 4:
+                raise
+            time.sleep(_retry_delay_seconds(exc, attempt))
+    raise last_error or RuntimeError("LLM call failed.")
+
+
 def _safe_json_loads(content: str) -> dict[str, Any] | None:
     try:
         data = json.loads(content)
@@ -70,6 +111,175 @@ def _safe_json_loads(content: str) -> dict[str, Any] | None:
         return None
 
 
+_DESIGN_TIERS: list[tuple[float, str, tuple[str, ...]]] = [
+    (4.0, "meta-analysis or systematic review", ("meta-analysis", "systematic review")),
+    (3.0, "randomized controlled trial", ("randomized controlled trial", "randomised controlled trial", "randomized trial")),
+    (2.2, "clinical trial", ("clinical trial",)),
+    (2.0, "observational study", ("observational", "cohort", "case-control", "case control", "comparative study")),
+    (1.0, "case report", ("case report", "case reports")),
+]
+
+_RELEVANCE_STOPWORDS = {
+    "about",
+    "after",
+    "among",
+    "and",
+    "are",
+    "compared",
+    "does",
+    "for",
+    "from",
+    "have",
+    "how",
+    "into",
+    "patients",
+    "than",
+    "that",
+    "the",
+    "this",
+    "what",
+    "when",
+    "with",
+    "would",
+}
+
+
+def _valid_pubmed_query(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if len(text) < 3 or len(text) > 500:
+        return False
+    return bool(re.search(r"[A-Za-z]", text))
+
+
+def _coerce_query_plan(question: str, parsed: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep an LLM plan only when its PubMed query validates. Otherwise use the rule-based query."""
+    fallback = _normalize_pubmed_query(question) or question.strip()
+    if not parsed or not _valid_pubmed_query(parsed.get("pubmed_query")):
+        return {
+            "population": "",
+            "intervention": "",
+            "comparison": "",
+            "outcome": "",
+            "pubmed_query": fallback,
+            "fallback_query": question.strip(),
+            "source": "rule_based",
+        }
+    fallback_query = parsed.get("fallback_query")
+    return {
+        "population": str(parsed.get("population") or "").strip(),
+        "intervention": str(parsed.get("intervention") or "").strip(),
+        "comparison": str(parsed.get("comparison") or "").strip(),
+        "outcome": str(parsed.get("outcome") or "").strip(),
+        "pubmed_query": str(parsed["pubmed_query"]).strip(),
+        "fallback_query": str(fallback_query).strip() if _valid_pubmed_query(fallback_query) else fallback,
+        "source": "llm",
+    }
+
+
+def study_design_score(article: dict[str, Any]) -> tuple[float, str]:
+    """Score study design from PubMed publication-type metadata, not the abstract text."""
+    publication_types = list(article.get("publication_types") or [])
+    if not publication_types and article.get("study_type"):
+        publication_types = [str(article["study_type"])]
+    typed = " ".join(publication_types).lower()
+    for score, label, keys in _DESIGN_TIERS:
+        if any(key in typed for key in keys):
+            return score, label
+    return 1.5, "unspecified design"
+
+
+def relevance_score(question: str, article: dict[str, Any]) -> float:
+    terms = {
+        token
+        for token in re.findall(r"[a-z0-9]+", question.lower())
+        if len(token) > 3 and token not in _RELEVANCE_STOPWORDS
+    }
+    if not terms:
+        return 0.0
+    document = set(re.findall(r"[a-z0-9]+", f"{article.get('title') or ''} {article.get('abstract') or ''}".lower()))
+    return len(terms & document) / len(terms)
+
+
+def recency_score(article: dict[str, Any], now_year: int | None = None) -> float:
+    year_match = re.search(r"(19|20)\d{2}", str(article.get("year") or ""))
+    if not year_match:
+        return 0.4
+    age = max(0, (now_year or date.today().year) - int(year_match.group(0)))
+    return max(0.0, round(2.0 - age * 0.08, 3))
+
+
+def rank_articles(articles: list[dict[str, Any]], question: str, now_year: int | None = None) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for article in articles:
+        design, design_label = study_design_score(article)
+        relevance = relevance_score(question, article)
+        recency = recency_score(article, now_year=now_year)
+        score = round(design * 2 + relevance * 2 + recency, 3)
+        updated = dict(article)
+        updated["rank_score"] = score
+        updated["rank_reason"] = (
+            f"design={design_label} ({design}), relevance={relevance:.2f}, recency={recency:.2f}"
+        )
+        ranked.append(updated)
+    ranked.sort(key=lambda item: item["rank_score"], reverse=True)
+    return ranked
+
+
+def assign_citation_indexes(
+    primary: list[dict[str, Any]],
+    comparison: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Number primary articles from [1], then continue that sequence for comparison articles."""
+    primary_out: list[dict[str, Any]] = []
+    for offset, article in enumerate(primary, start=1):
+        updated = dict(article)
+        updated["citation_index"] = offset
+        primary_out.append(updated)
+    comparison_out: list[dict[str, Any]] = []
+    start = len(primary_out) + 1
+    for offset, article in enumerate(comparison or []):
+        updated = dict(article)
+        updated["citation_index"] = start + offset
+        comparison_out.append(updated)
+    return primary_out, comparison_out
+
+
+def citation_numbers(text: str) -> list[int]:
+    numbers: list[int] = []
+    for group in re.findall(r"\[(\d+(?:\s*,\s*\d+)*)\]", text or ""):
+        for part in group.split(","):
+            numbers.append(int(part.strip()))
+    return numbers
+
+
+def _strip_invalid_citations(answer: str, valid_indexes: set[int]) -> tuple[str, list[int]]:
+    invalid: list[int] = []
+    sentences = re.split(r"(?<=[.!?])\s+", answer or "")
+    kept_sentences: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        kept: list[str] = []
+        for part in match.group(1).split(","):
+            number = int(part.strip())
+            if number in valid_indexes:
+                kept.append(str(number))
+            else:
+                invalid.append(number)
+        return f"[{', '.join(kept)}]" if kept else ""
+
+    for sentence in sentences:
+        numbers = citation_numbers(sentence)
+        if numbers and not any(number in valid_indexes for number in numbers):
+            invalid.extend(number for number in numbers if number not in valid_indexes)
+            continue
+        cleaned = re.sub(r"\[(\d+(?:\s*,\s*\d+)*)\]", replace, sentence).strip()
+        if cleaned:
+            kept_sentences.append(cleaned)
+    return re.sub(r"\s{2,}", " ", " ".join(kept_sentences)).strip(), invalid
+
+
 def _stringify_history(history: list[dict[str, str]]) -> str:
     if not history:
         return "No previous conversation."
@@ -82,11 +292,19 @@ def _stringify_history(history: list[dict[str, str]]) -> str:
     return "\n".join(lines) if lines else "No previous conversation."
 
 
-def _format_articles(articles: list[dict[str, Any]]) -> str:
+def _article_index(article: dict[str, Any], offset: int, start_index: int) -> int:
+    stored = article.get("citation_index")
+    if isinstance(stored, int) and stored > 0:
+        return stored
+    return start_index + offset
+
+
+def _format_articles(articles: list[dict[str, Any]], start_index: int = 1) -> str:
     if not articles:
         return "No articles retrieved."
     lines: list[str] = []
-    for index, article in enumerate(articles, start=1):
+    for offset, article in enumerate(articles):
+        index = _article_index(article, offset, start_index)
         lines.append(
             "\n".join(
                 [
@@ -122,13 +340,21 @@ def _format_trials(trials: list[dict[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
-def _prepare_reference_payload(articles: list[dict[str, Any]], summaries: dict[str, str], question: str, answer: str) -> list[dict[str, Any]]:
+def _prepare_reference_payload(
+    articles: list[dict[str, Any]],
+    summaries: dict[str, str],
+    question: str,
+    answer: str,
+    start_index: int = 1,
+    evidence: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    evidence = evidence or {}
     references: list[dict[str, Any]] = []
-    for index, article in enumerate(articles, start=1):
+    for offset, article in enumerate(articles):
         highlights = extract_highlight_sentences(article.get("abstract", ""), question, answer)
         references.append(
             {
-                "index": index,
+                "index": _article_index(article, offset, start_index),
                 "title": article.get("title", ""),
                 "authors": article.get("authors", []),
                 "link": article.get("link", ""),
@@ -137,11 +363,221 @@ def _prepare_reference_payload(articles: list[dict[str, Any]], summaries: dict[s
                 "year": article.get("year", ""),
                 "study_type": article.get("study_type", ""),
                 "summary": summaries.get(article.get("pmid", ""), ""),
+                "population": (evidence.get(article.get("pmid", "")) or {}).get("population", ""),
+                "intervention": (evidence.get(article.get("pmid", "")) or {}).get("intervention", ""),
+                "comparator": (evidence.get(article.get("pmid", "")) or {}).get("comparator", ""),
+                "outcome": (evidence.get(article.get("pmid", "")) or {}).get("outcome", ""),
+                "effect_direction": (evidence.get(article.get("pmid", "")) or {}).get("effect_direction", ""),
+                "significance": (evidence.get(article.get("pmid", "")) or {}).get("significance", ""),
                 "highlights": highlights,
                 "abstract": article.get("abstract", ""),
+                "rank_score": article.get("rank_score"),
+                "rank_reason": article.get("rank_reason", ""),
             }
         )
     return references
+
+
+def _query_candidates(plan: dict[str, Any] | None) -> list[str]:
+    if not plan:
+        return []
+    return [str(plan.get("pubmed_query") or ""), str(plan.get("fallback_query") or "")]
+
+
+def _plan_one(question: str) -> dict[str, Any]:
+    prompt_question = question.strip()
+    if not prompt_question:
+        return _coerce_query_plan(question, None)
+    try:
+        system_prompt = """
+You turn a clinical question into a PubMed search plan.
+Return valid JSON only:
+{
+  "population": "who the question is about",
+  "intervention": "the treatment, exposure, or test",
+  "comparison": "the comparator, or empty if none",
+  "outcome": "the outcome of interest",
+  "pubmed_query": "a PubMed query using MeSH-style terms and Boolean AND/OR, no field tags required",
+  "fallback_query": "a shorter keyword query if the MeSH-style query is too narrow"
+}
+Use only concepts present in the question. Do not add unrelated drugs or diseases.
+""".strip()
+        response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=prompt_question)])
+        return _coerce_query_plan(prompt_question, _safe_json_loads(getattr(response, "content", "")))
+    except Exception:
+        return _coerce_query_plan(prompt_question, None)
+
+
+def _plan_query(state: ResearchState) -> ResearchState:
+    question = state["question"]
+    comparison_question = state.get("comparison_question")
+    if state.get("mode") == "compare" and comparison_question:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            primary_future = executor.submit(_plan_one, question)
+            comparison_future = executor.submit(_plan_one, comparison_question)
+            return {
+                "query_plan": primary_future.result(),
+                "comparison_query_plan": comparison_future.result(),
+            }
+    return {"query_plan": _plan_one(question)}
+
+
+def _format_summaries(articles: list[dict[str, Any]], summaries_by_pmid: dict[str, dict[str, Any]]) -> str:
+    if not articles:
+        return "No article summaries."
+    lines: list[str] = []
+    for offset, article in enumerate(articles):
+        index = _article_index(article, offset, 1)
+        pmid = str(article.get("pmid") or "")
+        record = summaries_by_pmid.get(pmid) or {}
+        lines.append(
+            "\n".join(
+                [
+                    f"[{index}] PMID {pmid or 'NA'}",
+                    f"Title: {article.get('title', 'Untitled')}",
+                    f"Study type: {article.get('study_type') or ', '.join(article.get('publication_types') or []) or 'Unknown'}",
+                    f"Year: {article.get('year') or 'Unknown'}",
+                    f"Population: {record.get('population') or 'not reported'}",
+                    f"Intervention: {record.get('intervention') or 'not reported'}",
+                    f"Comparator: {record.get('comparator') or 'not reported'}",
+                    f"Outcome: {record.get('outcome') or 'not reported'}",
+                    f"Effect direction: {record.get('effect_direction') or 'unclear'}",
+                    f"Significance: {record.get('significance') or 'not reported'}",
+                ]
+            )
+        )
+    return "\n\n".join(lines)
+
+
+def _articles_in_citation_order(state: ResearchState) -> list[dict[str, Any]]:
+    combined = list(state.get("articles") or []) + list(state.get("comparison_articles") or [])
+    return sorted(combined, key=lambda article: int(article.get("citation_index") or 0))
+
+
+def _select_for_summary(primary: list[dict[str, Any]], comparison: list[dict[str, Any]], cap: int) -> list[dict[str, Any]]:
+    cap = max(1, cap)
+    if not comparison:
+        return primary[:cap]
+    primary_slots = min(len(primary), max(1, cap // 2))
+    comparison_slots = min(len(comparison), max(0, cap - primary_slots))
+    leftover = cap - primary_slots - comparison_slots
+    if leftover and len(primary) > primary_slots:
+        primary_slots = min(len(primary), primary_slots + leftover)
+        leftover = cap - primary_slots - comparison_slots
+    if leftover and len(comparison) > comparison_slots:
+        comparison_slots = min(len(comparison), comparison_slots + leftover)
+    return primary[:primary_slots] + comparison[:comparison_slots]
+
+
+def _blank_summary(pmid: str) -> dict[str, str]:
+    return {
+        "pmid": pmid,
+        "population": "",
+        "intervention": "",
+        "comparator": "",
+        "outcome": "",
+        "effect_direction": "unclear",
+        "significance": "not reported",
+        "summary": "",
+    }
+
+
+def _summary_sentence(record: dict[str, Any]) -> str:
+    return (
+        f"Population: {record.get('population') or 'not reported'}. "
+        f"Intervention: {record.get('intervention') or 'not reported'}. "
+        f"Comparator: {record.get('comparator') or 'not reported'}. "
+        f"Outcome: {record.get('outcome') or 'not reported'}. "
+        f"Effect direction: {record.get('effect_direction') or 'unclear'}. "
+        f"Significance: {record.get('significance') or 'not reported'}."
+    )
+
+
+def _normalize_effect(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    allowed = {"benefit", "harm", "no difference", "mixed", "unclear"}
+    return text if text in allowed else "unclear"
+
+
+def _normalize_significance(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    allowed = {"significant", "not significant", "not reported"}
+    return text if text in allowed else "not reported"
+
+
+def quote_in_abstract(quote: str, abstract: str) -> bool:
+    """A supporting quote must be a verbatim stretch of the cited abstract."""
+    normalized_quote = re.sub(r"\s+", " ", quote or "").strip().lower()
+    normalized_abstract = re.sub(r"\s+", " ", abstract or "").strip().lower()
+    if len(normalized_quote) < 20 or not normalized_abstract:
+        return False
+    return normalized_quote in normalized_abstract
+
+
+def _summarize_one(question: str, article: dict[str, Any]) -> dict[str, str]:
+    pmid = str(article.get("pmid") or "")
+    abstract = str(article.get("abstract") or "").strip()
+    record = _blank_summary(pmid)
+    if not abstract:
+        record["summary"] = _summary_sentence(record)
+        return record
+    try:
+        system_prompt = """
+Extract structured facts from one PubMed abstract.
+Use only facts stated in the abstract. If a field is absent, use an empty string.
+effect_direction must be one of: benefit, harm, no difference, mixed, unclear.
+significance must be one of: significant, not significant, not reported.
+Judge effect_direction for the question's main outcome, not a surrogate the question did not ask about.
+Return valid JSON:
+{
+  "pmid": "the given pmid",
+  "population": "",
+  "intervention": "",
+  "comparator": "",
+  "outcome": "",
+  "effect_direction": "unclear",
+  "significance": "not reported"
+}
+""".strip()
+        user_prompt = (
+            f"Question: {question}\n"
+            f"PMID: {pmid}\n"
+            f"Title: {article.get('title', '')}\n"
+            f"Abstract: {abstract}"
+        )
+        response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        parsed = _safe_json_loads(getattr(response, "content", "")) or {}
+        record["population"] = str(parsed.get("population") or "").strip()
+        record["intervention"] = str(parsed.get("intervention") or "").strip()
+        record["comparator"] = str(parsed.get("comparator") or "").strip()
+        record["outcome"] = str(parsed.get("outcome") or "").strip()
+        record["effect_direction"] = _normalize_effect(parsed.get("effect_direction"))
+        record["significance"] = _normalize_significance(parsed.get("significance"))
+    except Exception:
+        pass
+    record["summary"] = _summary_sentence(record)
+    return record
+
+
+def _apply_citation_confidence(confidence: dict[str, Any], audit: dict[str, Any]) -> dict[str, Any]:
+    failures = len(audit.get("invalid_citations") or []) + len(audit.get("unsupported_claims") or [])
+    if not failures:
+        return confidence
+    updated = dict(confidence)
+    score = max(0.05, round(float(updated.get("score") or 0) - 0.1 * failures, 2))
+    if score >= 0.75:
+        label = "High"
+    elif score >= 0.5:
+        label = "Moderate"
+    else:
+        label = "Low"
+    updated["score"] = score
+    updated["label"] = label
+    updated["citation_penalty"] = failures
+    rationale = str(updated.get("rationale") or "").strip()
+    penalty_note = f" Citation check lowered confidence after {failures} unsupported or invalid citation(s)."
+    updated["rationale"] = f"{rationale}{penalty_note}".strip()
+    return updated
 
 
 def _retrieve_literature(state: ResearchState) -> ResearchState:
@@ -149,18 +585,21 @@ def _retrieve_literature(state: ResearchState) -> ResearchState:
     question = state["question"]
     comparison_question = state.get("comparison_question")
     include_trials = bool(state.get("include_trials", True))
-    max_results = state.get("max_results", 5)
+    pool = RETRIEVAL_CANDIDATES
+    primary_candidates = _query_candidates(state.get("query_plan"))
+    comparison_candidates = _query_candidates(state.get("comparison_query_plan"))
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         articles_future = executor.submit(
             search_pubmed,
             question,
-            max_results,
+            pool,
             filters.get("year_from"),
             filters.get("year_to"),
             filters.get("study_type"),
+            primary_candidates,
         )
-        cached_future = executor.submit(search_cached_literature, question, min(max_results, 3))
+        cached_future = executor.submit(search_cached_literature, question, min(int(state.get("max_results") or 3), 3))
         trials_future = executor.submit(search_clinical_trials, question, 3) if include_trials else None
 
         comparison_articles_future = None
@@ -169,10 +608,11 @@ def _retrieve_literature(state: ResearchState) -> ResearchState:
             comparison_articles_future = executor.submit(
                 search_pubmed,
                 comparison_question,
-                max_results,
+                pool,
                 filters.get("year_from"),
                 filters.get("year_to"),
                 filters.get("study_type"),
+                comparison_candidates,
             )
             if include_trials:
                 comparison_trials_future = executor.submit(search_clinical_trials, comparison_question, 3)
@@ -189,8 +629,41 @@ def _retrieve_literature(state: ResearchState) -> ResearchState:
         return result
 
 
+def _rank_evidence(state: ResearchState) -> ResearchState:
+    keep = min(int(state.get("max_results") or MAX_ARTICLE_SUMMARIES), MAX_ARTICLE_SUMMARIES)
+    keep = max(1, keep)
+    primary = rank_articles(state.get("articles") or [], state["question"])[:keep]
+    comparison = rank_articles(state.get("comparison_articles") or [], state.get("comparison_question") or state["question"])
+    if state.get("mode") == "compare":
+        comparison = comparison[:keep]
+    else:
+        comparison = []
+    primary, comparison = assign_citation_indexes(primary, comparison)
+    return {"articles": primary, "comparison_articles": comparison}
+
+
+def _summarize_articles(state: ResearchState) -> ResearchState:
+    question = state["question"]
+    comparison_question = state.get("comparison_question") or question
+    primary = state.get("articles") or []
+    comparison = state.get("comparison_articles") or []
+    selected = _select_for_summary(primary, comparison, MAX_ARTICLE_SUMMARIES)
+    if not selected:
+        return {"article_summaries": []}
+
+    comparison_ids = {id(article) for article in comparison}
+
+    def summarize(article: dict[str, Any]) -> dict[str, Any]:
+        prompt_question = comparison_question if id(article) in comparison_ids else question
+        return _summarize_one(prompt_question, article)
+
+    workers = min(4, len(selected))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        summaries = list(executor.map(summarize, selected))
+    return {"article_summaries": summaries}
+
+
 def _synthesize(state: ResearchState) -> ResearchState:
-    llm = _build_llm()
     question = state["question"]
     comparison_question = state.get("comparison_question")
     mode = state.get("mode", "standard")
@@ -199,19 +672,25 @@ def _synthesize(state: ResearchState) -> ResearchState:
     comparison_articles = state.get("comparison_articles", [])
     trials = state.get("trials", [])
     comparison_trials = state.get("comparison_trials", [])
+    summaries_by_pmid = {
+        str(item.get("pmid") or "").strip(): item
+        for item in state.get("article_summaries") or []
+        if isinstance(item, dict) and str(item.get("pmid") or "").strip()
+    }
 
     system_prompt = """
 You are a careful medical literature research assistant.
-Rely only on the provided evidence.
+Rely only on the provided structured study summaries. Do not use outside knowledge.
 Do not invent results, effect sizes, or recommendations.
+Cite a summary only with its printed number, such as [1].
+Every sentence that states a result must include a citation.
+Count how many summarized studies support the conclusion, how many oppose it, and how many are unclear.
+If effect directions disagree, say that the evidence conflicts and name both directions.
 
 Return valid JSON with this shape:
 {
-  "answer": "Main answer with inline numeric citations like [1] and [2].",
+  "answer": "Main answer with inline numeric citations like [1] and [2]. Include the study counts.",
   "plain_language_summary": "Short simpler explanation for a non-specialist reader.",
-  "article_summaries": [
-    {"pmid": "12345678", "summary": "1-2 sentence summary of the abstract."}
-  ],
   "confidence_explanation": "Why the evidence appears strong, moderate, or weak."
 }
 """.strip()
@@ -227,23 +706,23 @@ Primary clinical question:
 Comparison clinical question:
 {comparison_question}
 
-Primary published literature:
-{_format_articles(articles)}
+Primary article summaries:
+{_format_summaries(articles, summaries_by_pmid)}
 
 Primary ongoing trials:
 {_format_trials(trials)}
 
-Comparison published literature:
-{_format_articles(comparison_articles)}
+Comparison article summaries:
+{_format_summaries(comparison_articles, summaries_by_pmid)}
 
 Comparison ongoing trials:
 {_format_trials(comparison_trials)}
 
 Write a head-to-head comparison that:
-- summarizes the evidence for each side
-- states where one treatment appears stronger, weaker, or equivalent
-- mentions if evidence is weak, indirect, or conflicting
-- uses inline citations only for PubMed papers, numbered in the same order they were provided in each evidence block
+- uses only the structured summaries above
+- states how many studies on each side support benefit, harm, no difference, or an unclear effect
+- calls out conflicting effect directions when they are present
+- cites PubMed summaries with one continuous numbering sequence: primary starts at [1], and comparison numbers continue after the last primary number instead of restarting at [1]
 
 Return JSON only.
 """.strip()
@@ -255,41 +734,189 @@ Conversation history:
 Clinical question:
 {question}
 
-Published literature:
-{_format_articles(articles)}
+Article summaries:
+{_format_summaries(articles, summaries_by_pmid)}
 
 ClinicalTrials.gov records:
 {_format_trials(trials)}
 
 Write a concise evidence synthesis that:
-- summarizes each abstract in 1-2 sentences
-- synthesizes a practical answer in plain language
-- mentions any uncertainty, conflict, or evidence limitations
+- uses only the structured summaries above
+- answers the question in plain language
+- says how many studies support the conclusion and how many do not
+- calls out conflicting evidence when effect directions disagree
 - notes relevant ongoing trials if present
-- uses inline citations that match the PubMed order above
+- uses inline citations that match the summary numbers above
 
 Return JSON only.
 """.strip()
 
-    response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+    response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
     parsed = _safe_json_loads(getattr(response, "content", ""))
     if not parsed:
         parsed = {
             "answer": getattr(response, "content", "").strip() or "No answer generated.",
             "plain_language_summary": "",
-            "article_summaries": [],
             "confidence_explanation": "",
         }
+    parsed["article_summaries"] = list(summaries_by_pmid.values())
     return {"synthesis": parsed}
+
+
+def _verify_citations(state: ResearchState) -> ResearchState:
+    """Check that each [n] citation exists and that the cited abstract supports the sentence.
+
+    Invalid citation numbers are removed even if the model call fails. Support judgments
+    fail open: a model or JSON failure keeps the answer after the index check.
+    """
+    synthesis = dict(state.get("synthesis") or {})
+    answer = str(synthesis.get("answer", "")).strip()
+    articles = _articles_in_citation_order(state)
+    if not answer:
+        return {}
+
+    valid_indexes = {
+        int(article["citation_index"])
+        for article in articles
+        if isinstance(article.get("citation_index"), int)
+    }
+    if not valid_indexes:
+        valid_indexes = set(range(1, len(articles) + 1))
+
+    cited = citation_numbers(answer)
+    index_invalid = [number for number in cited if number not in valid_indexes]
+    index_valid = [number for number in cited if number in valid_indexes]
+    validity_rate = 1.0 if not cited else round(len(index_valid) / len(cited), 3)
+
+    cleaned_answer, stripped = _strip_invalid_citations(answer, valid_indexes)
+    invalid_citations = list(dict.fromkeys(index_invalid + stripped))
+    audit: dict[str, Any] = {
+        "validity_rate": validity_rate,
+        "citation_count": len(cited),
+        "valid_citation_count": len(index_valid),
+        "invalid_citations": invalid_citations,
+        "support_rate": None,
+        "claim_count": 0,
+        "supported_claim_count": 0,
+        "unsupported_claims": [],
+        "removed_or_changed": [],
+    }
+
+    if not articles:
+        synthesis["answer"] = cleaned_answer or answer
+        synthesis["citation_audit"] = audit
+        synthesis["verifier_removed_or_changed"] = []
+        return {"synthesis": synthesis}
+
+    try:
+        system_prompt = """
+You are a strict fact-checker reviewing a medical evidence synthesis before it is shown to a user.
+You will be given a generated answer with inline citations like [1], [2], and the source
+abstracts those citation numbers refer to. Numbers are continuous across primary and comparison articles.
+
+For every sentence that contains a citation:
+- supported is true only when that sentence is explicitly supported by the cited abstract.
+- quote must be an exact sentence or clause copied from that abstract. Do not paraphrase the quote.
+- If you cannot copy a supporting sentence, supported is false and quote is empty.
+- If the sentence adds a recommendation, clinical-utility judgment, or conclusion beyond the abstract, supported is false.
+- If it calls a study "the only available study" or otherwise describes the evidence base in a way the abstract does not, supported is false.
+- If it misstates or overstates the abstract, supported is false.
+
+Then rewrite the answer so unsupported sentences are removed. Do not add new facts or citations.
+
+Return valid JSON:
+{
+  "verified_answer": "Corrected answer with the same citation style.",
+  "claims": [
+    {"citation": 1, "sentence": "the cited sentence", "supported": true, "quote": "exact sentence copied from the abstract", "reason": "short reason"}
+  ],
+  "removed_or_changed": ["One short entry per removed or changed sentence. Empty if none."]
+}
+""".strip()
+        user_prompt = f"""
+Generated answer to check:
+{cleaned_answer or answer}
+
+Source abstracts. Use the printed citation numbers, which do not restart for comparison articles:
+{_format_articles(articles)}
+
+Return JSON only.
+""".strip()
+        response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        parsed = _safe_json_loads(getattr(response, "content", "")) or {}
+        verified = str(parsed.get("verified_answer") or "").strip()
+        claims = [item for item in parsed.get("claims") or [] if isinstance(item, dict)]
+        abstracts_by_index = {
+            int(article["citation_index"]): str(article.get("abstract") or "")
+            for article in articles
+            if isinstance(article.get("citation_index"), int)
+        }
+        judged: list[dict[str, Any]] = []
+        for item in claims:
+            citation = item.get("citation")
+            try:
+                citation_number = int(citation)
+            except (TypeError, ValueError):
+                citation_number = None
+            quote = str(item.get("quote") or "").strip()
+            supported = item.get("supported") is True
+            reason = str(item.get("reason") or "").strip()
+            abstract = abstracts_by_index.get(citation_number or -1, "")
+            if supported and not quote_in_abstract(quote, abstract):
+                supported = False
+                reason = "The claim did not include an exact supporting sentence from the cited abstract."
+            judged.append(
+                {
+                    "citation": citation,
+                    "sentence": str(item.get("sentence") or "").strip(),
+                    "supported": supported,
+                    "quote": quote,
+                    "reason": reason,
+                }
+            )
+        unsupported = [item for item in judged if not item["supported"]]
+        if judged:
+            supported_count = sum(1 for item in judged if item["supported"])
+            audit["claim_count"] = len(judged)
+            audit["supported_claim_count"] = supported_count
+            audit["support_rate"] = round(supported_count / len(judged), 3)
+        elif verified:
+            audit["support_rate"] = 1.0 if not parsed.get("removed_or_changed") else 0.0
+        audit["unsupported_claims"] = unsupported
+        audit["removed_or_changed"] = parsed.get("removed_or_changed") or []
+        if verified:
+            verified, extra_invalid = _strip_invalid_citations(verified, valid_indexes)
+            audit["invalid_citations"] = list(dict.fromkeys(invalid_citations + extra_invalid))
+            for claim in unsupported:
+                sentence = claim["sentence"]
+                if sentence and sentence in verified:
+                    verified = verified.replace(sentence, "").strip()
+            synthesis["answer"] = re.sub(r"\s{2,}", " ", verified).strip() or cleaned_answer
+        else:
+            synthesis["answer"] = cleaned_answer or answer
+    except Exception:
+        synthesis["answer"] = cleaned_answer or answer
+
+    synthesis["citation_audit"] = audit
+    synthesis["verifier_removed_or_changed"] = audit["removed_or_changed"]
+    return {"synthesis": synthesis}
 
 
 def _build_graph():
     graph = StateGraph(ResearchState)
+    graph.add_node("plan_query", _plan_query)
     graph.add_node("retrieve_literature", _retrieve_literature)
+    graph.add_node("rank_evidence", _rank_evidence)
+    graph.add_node("summarize_articles", _summarize_articles)
     graph.add_node("synthesize", _synthesize)
-    graph.add_edge(START, "retrieve_literature")
-    graph.add_edge("retrieve_literature", "synthesize")
-    graph.add_edge("synthesize", END)
+    graph.add_node("verify_citations", _verify_citations)
+    graph.add_edge(START, "plan_query")
+    graph.add_edge("plan_query", "retrieve_literature")
+    graph.add_edge("retrieve_literature", "rank_evidence")
+    graph.add_edge("rank_evidence", "summarize_articles")
+    graph.add_edge("summarize_articles", "synthesize")
+    graph.add_edge("synthesize", "verify_citations")
+    graph.add_edge("verify_citations", END)
     return graph.compile()
 
 
@@ -325,29 +952,56 @@ def run_research(
     result = GRAPH.invoke(state)
     synthesis = result.get("synthesis", {})
     articles = result.get("articles", [])
-    reference_summaries = {
-        str(item.get("pmid", "")).strip(): str(item.get("summary", "")).strip()
+    evidence_by_pmid = {
+        str(item.get("pmid", "")).strip(): item
         for item in synthesis.get("article_summaries", [])
-        if isinstance(item, dict)
+        if isinstance(item, dict) and str(item.get("pmid", "")).strip()
+    }
+    reference_summaries = {
+        pmid: str(item.get("summary", "")).strip() for pmid, item in evidence_by_pmid.items()
     }
     references = _prepare_reference_payload(
         articles=articles,
         summaries=reference_summaries,
         question=question,
         answer=str(synthesis.get("answer", "")),
+        evidence=evidence_by_pmid,
     )
+    comparison_articles = result.get("comparison_articles", [])
     confidence = assess_confidence(articles, question)
     if synthesis.get("confidence_explanation"):
         confidence["model_explanation"] = str(synthesis.get("confidence_explanation", "")).strip()
+    citation_audit = synthesis.get("citation_audit") or {
+        "validity_rate": None,
+        "invalid_citations": [],
+        "support_rate": None,
+        "unsupported_claims": [],
+        "removed_or_changed": synthesis.get("verifier_removed_or_changed") or [],
+    }
+    confidence = _apply_citation_confidence(confidence, citation_audit)
 
     comparison_references: list[dict[str, Any]] = []
     if mode == "compare":
         comparison_references = _prepare_reference_payload(
-            articles=result.get("comparison_articles", []),
-            summaries={},
+            articles=comparison_articles,
+            summaries=reference_summaries,
             question=comparison_question or "",
             answer=str(synthesis.get("answer", "")),
+            start_index=len(articles) + 1,
+            evidence=evidence_by_pmid,
         )
+
+    def ranking_rows(items: list[dict[str, Any]], side: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "pmid": item.get("pmid", ""),
+                "index": item.get("citation_index"),
+                "rank_score": item.get("rank_score"),
+                "rank_reason": item.get("rank_reason", ""),
+                "side": side,
+            }
+            for item in items
+        ]
 
     return {
         "answer": str(synthesis.get("answer", "")).strip(),
@@ -361,12 +1015,15 @@ def run_research(
         "mode": mode,
         "comparison_question": comparison_question,
         "filters": filters,
+        "query_plan": result.get("query_plan") or {},
+        "comparison_query_plan": result.get("comparison_query_plan") or {},
+        "rankings": ranking_rows(articles, "primary") + ranking_rows(comparison_articles, "comparison"),
+        "citation_audit": citation_audit,
     }
 
 
 def simplify_text(question: str, answer: str) -> str:
-    llm = _build_llm()
     system_prompt = "Rewrite medical evidence summaries at an accessible reading level without changing the meaning."
     user_prompt = f"Question: {question}\n\nOriginal answer:\n{answer}\n\nRewrite this in clear plain language at roughly an 8th-grade reading level."
-    response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+    response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
     return getattr(response, "content", "").strip()
