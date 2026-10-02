@@ -1,9 +1,12 @@
+import hashlib
 import json
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from pathlib import Path
 from typing import Any, TypedDict
 
 from dotenv import load_dotenv
@@ -45,6 +48,12 @@ class ResearchState(TypedDict, total=False):
 
 MAX_ARTICLE_SUMMARIES = int(os.getenv("MAX_ARTICLE_SUMMARIES", "4"))
 RETRIEVAL_CANDIDATES = int(os.getenv("RETRIEVAL_CANDIDATES", "15"))
+_SUMMARY_CACHE_LOCK = threading.Lock()
+_SUMMARY_CACHE_PATH = (
+    Path("/tmp/literature-cache/summary_cache.json")
+    if os.getenv("VERCEL")
+    else Path(__file__).resolve().parent / ".cache" / "literature" / "summary_cache.json"
+)
 
 
 def _build_llm():
@@ -434,9 +443,7 @@ def _format_summaries(articles: list[dict[str, Any]], summaries_by_pmid: dict[st
             "\n".join(
                 [
                     f"[{index}] PMID {pmid or 'NA'}",
-                    f"Title: {article.get('title', 'Untitled')}",
-                    f"Study type: {article.get('study_type') or ', '.join(article.get('publication_types') or []) or 'Unknown'}",
-                    f"Year: {article.get('year') or 'Unknown'}",
+                    f"Study type: {article.get('study_type') or 'Unknown'}",
                     f"Population: {record.get('population') or 'not reported'}",
                     f"Intervention: {record.get('intervention') or 'not reported'}",
                     f"Comparator: {record.get('comparator') or 'not reported'}",
@@ -514,13 +521,42 @@ def quote_in_abstract(quote: str, abstract: str) -> bool:
     return normalized_quote in normalized_abstract
 
 
+def _summary_cache_key(question: str, pmid: str) -> str:
+    raw = f"{question.strip().lower()}::{pmid}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _read_summary_cache() -> dict[str, Any]:
+    if not _SUMMARY_CACHE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(_SUMMARY_CACHE_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_summary_cache(cache: dict[str, Any]) -> None:
+    try:
+        _SUMMARY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _SUMMARY_CACHE_PATH.write_text(json.dumps(cache))
+    except OSError:
+        return
+
+
 def _summarize_one(question: str, article: dict[str, Any]) -> dict[str, str]:
     pmid = str(article.get("pmid") or "")
     abstract = str(article.get("abstract") or "").strip()
+    cache_key = _summary_cache_key(question, pmid)
+    with _SUMMARY_CACHE_LOCK:
+        cached = _read_summary_cache().get(cache_key)
+    if isinstance(cached, dict) and cached.get("pmid"):
+        return cached
     record = _blank_summary(pmid)
     if not abstract:
         record["summary"] = _summary_sentence(record)
         return record
+    parsed: dict[str, Any] = {}
     try:
         system_prompt = """
 Extract structured facts from one PubMed abstract.
@@ -554,8 +590,13 @@ Return valid JSON:
         record["effect_direction"] = _normalize_effect(parsed.get("effect_direction"))
         record["significance"] = _normalize_significance(parsed.get("significance"))
     except Exception:
-        pass
+        parsed = {}
     record["summary"] = _summary_sentence(record)
+    if parsed:
+        with _SUMMARY_CACHE_LOCK:
+            cache = _read_summary_cache()
+            cache[cache_key] = record
+            _write_summary_cache(cache)
     return record
 
 

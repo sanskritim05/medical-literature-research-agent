@@ -132,8 +132,11 @@ The harness is 20 clinical questions with well-established evidence grades.
 ```sh
 pip install pytest
 pytest tests/test_agent_pipeline.py
+python eval/run_eval.py --subset
 python eval/run_eval.py
 ```
+
+`--subset` runs five questions (statins, ACE inhibitors, smoking cessation, metformin, and warfarin) and writes `eval/results_subset.json`.
 
 `eval/run_eval.py` writes `eval/results.json`. Each question has a `reference_conclusion`. The script grades whether the answer reaches that conclusion and prints a sample of graded answers. Trials are off. The default model is `llama-3.1-8b-instant`. That ID was not in this account's Groq model list, so the recorded runs set `GROQ_MODEL=openai/gpt-oss-20b`.
 

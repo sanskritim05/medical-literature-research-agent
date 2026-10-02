@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -18,6 +19,14 @@ from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
 QUESTIONS_PATH = Path(__file__).with_name("questions.json")
 RESULTS_PATH = Path(__file__).with_name("results.json")
+SUBSET_RESULTS_PATH = Path(__file__).with_name("results_subset.json")
+SUBSET_IDS = (
+    "statin-secondary-prevention",
+    "ace-hfref",
+    "smoking-cessation-lung-cancer",
+    "metformin-t2d",
+    "warfarin-af-stroke",
+)
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
@@ -113,10 +122,11 @@ def evaluate_question(item: dict, *, max_results: int) -> dict:
         }
 
 
-def _write_results(rows: list[dict], questions: list[dict], max_results: int) -> dict:
+def _write_results(rows: list[dict], questions: list[dict], max_results: int, *, results_path: Path) -> dict:
     completed = [row for row in rows if not row["error"]]
     citation_total = sum(row["citation_count"] for row in completed)
     valid_total = sum(row["valid_citation_count"] for row in completed)
+    uncited_answers = sum(1 for row in completed if row["citation_count"] == 0)
     claim_total = sum(row["claim_count"] for row in completed)
     supported_total = sum(row["supported_claim_count"] for row in completed)
     latencies = [row["latency_seconds"] for row in completed]
@@ -132,7 +142,8 @@ def _write_results(rows: list[dict], questions: list[dict], max_results: int) ->
         "error_count": len(rows) - len(completed),
         "max_results": max_results,
         "include_trials": False,
-        "citation_validity_rate": _rate(valid_total, citation_total),
+        "citation_validity_rate": _rate(valid_total, citation_total + uncited_answers),
+        "uncited_answers": uncited_answers,
         "claim_support_rate": _rate(supported_total, claim_total),
         "average_latency_seconds": round(sum(latencies) / len(latencies), 2) if latencies else None,
         "confidence_label_match_rate": _rate(matches, len(completed)),
@@ -145,19 +156,34 @@ def _write_results(rows: list[dict], questions: list[dict], max_results: int) ->
         "supported_claim_count": supported_total,
     }
     payload = {"summary": summary, "questions": rows}
-    RESULTS_PATH.write_text(json.dumps(payload, indent=2))
+    results_path.write_text(json.dumps(payload, indent=2))
     return summary
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the clinical-question eval.")
+    parser.add_argument(
+        "--subset",
+        action="store_true",
+        help="Run 5 fixed questions (statins, ACE inhibitors, smoking cessation, metformin, warfarin).",
+    )
+    args = parser.parse_args()
     questions = json.loads(QUESTIONS_PATH.read_text())
+    results_path = RESULTS_PATH
+    if args.subset:
+        by_id = {item["id"]: item for item in questions}
+        missing = [item_id for item_id in SUBSET_IDS if item_id not in by_id]
+        if missing:
+            raise SystemExit(f"Subset questions missing from questions.json: {', '.join(missing)}")
+        questions = [by_id[item_id] for item_id in SUBSET_IDS]
+        results_path = SUBSET_RESULTS_PATH
     max_results = int(os.getenv("EVAL_MAX_RESULTS", "4"))
     rows = []
     for index, item in enumerate(questions, start=1):
         print(f"[{index}/{len(questions)}] {item['id']}", flush=True)
         row = evaluate_question(item, max_results=max_results)
         rows.append(row)
-        summary = _write_results(rows, questions, max_results)
+        summary = _write_results(rows, questions, max_results, results_path=results_path)
         print(
             f"  label={row['confidence_label']} expected={row['expected_strength']} "
             f"correct={row['answer_correct']} latency={row['latency_seconds']}s error={row['error']}",

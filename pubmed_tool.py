@@ -467,6 +467,44 @@ def _esearch_pmids(term: str, retmax: int) -> list[str]:
     return [elem.text.strip() for elem in root.findall(".//IdList/Id") if elem.text]
 
 
+def _retrieval_cache_key(
+    query: str,
+    max_results: int,
+    year_from: int | None,
+    year_to: int | None,
+    study_type: str | None,
+) -> str:
+    payload = {
+        "query": query.strip().lower(),
+        "max_results": max_results,
+        "year_from": year_from,
+        "year_to": year_to,
+        "study_type": study_type or "",
+    }
+    raw = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _read_retrieval_cache() -> dict[str, Any]:
+    path = CACHE_DIR / "retrieval_cache.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_retrieval_cache(cache: dict[str, Any]) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = CACHE_DIR / "retrieval_cache.json"
+        path.write_text(json.dumps(cache))
+    except OSError:
+        return
+
+
 def search_pubmed(
     query: str,
     max_results: int = 5,
@@ -477,6 +515,12 @@ def search_pubmed(
 ) -> list[dict[str, Any]]:
     if not query or not query.strip():
         raise ValueError("Query must not be empty.")
+
+    cache_key = _retrieval_cache_key(query, max_results, year_from, year_to, study_type)
+    with _CACHE_LOCK:
+        cached_result = _read_retrieval_cache().get(cache_key)
+    if isinstance(cached_result, list) and cached_result:
+        return exclude_retracted(cached_result)[:max_results]
 
     candidate_queries: list[str] = []
     for candidate in query_candidates or []:
@@ -539,7 +583,13 @@ def search_pubmed(
         article = combined.get(pmid)
         if article and article.get("abstract") and not is_retracted(article):
             ordered_articles.append(article)
-    return ordered_articles[:max_results]
+    ordered_articles = ordered_articles[:max_results]
+    if ordered_articles:
+        with _CACHE_LOCK:
+            cache = _read_retrieval_cache()
+            cache[cache_key] = ordered_articles
+            _write_retrieval_cache(cache)
+    return ordered_articles
 
 
 def search_clinical_trials(query: str, max_results: int = 3) -> list[dict[str, Any]]:
