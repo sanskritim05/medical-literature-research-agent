@@ -784,9 +784,10 @@ def _verify_citations(state: ResearchState) -> ResearchState:
         valid_indexes = set(range(1, len(articles) + 1))
 
     cited = citation_numbers(answer)
+    cited_set = set(cited)
     index_invalid = [number for number in cited if number not in valid_indexes]
     index_valid = [number for number in cited if number in valid_indexes]
-    validity_rate = 1.0 if not cited else round(len(index_valid) / len(cited), 3)
+    validity_rate = 0.0 if not cited else round(len(index_valid) / len(cited), 3)
 
     cleaned_answer, stripped = _strip_invalid_citations(answer, valid_indexes)
     invalid_citations = list(dict.fromkeys(index_invalid + stripped))
@@ -803,6 +804,19 @@ def _verify_citations(state: ResearchState) -> ResearchState:
     }
 
     if not articles:
+        if not cited:
+            audit["support_rate"] = 0.0
+            audit["claim_count"] = 1
+            audit["supported_claim_count"] = 0
+            audit["unsupported_claims"] = [
+                {
+                    "citation": None,
+                    "sentence": answer[:300],
+                    "supported": False,
+                    "quote": "",
+                    "reason": "The answer has no [n] citations.",
+                }
+            ]
         synthesis["answer"] = cleaned_answer or answer
         synthesis["citation_audit"] = audit
         synthesis["verifier_removed_or_changed"] = []
@@ -862,7 +876,10 @@ Return JSON only.
             supported = item.get("supported") is True
             reason = str(item.get("reason") or "").strip()
             abstract = abstracts_by_index.get(citation_number or -1, "")
-            if supported and not quote_in_abstract(quote, abstract):
+            if citation_number is None or citation_number not in cited_set:
+                supported = False
+                reason = "Claim is not tied to a [n] citation in the answer."
+            elif supported and not quote_in_abstract(quote, abstract):
                 supported = False
                 reason = "The claim did not include an exact supporting sentence from the cited abstract."
             judged.append(
@@ -880,8 +897,19 @@ Return JSON only.
             audit["claim_count"] = len(judged)
             audit["supported_claim_count"] = supported_count
             audit["support_rate"] = round(supported_count / len(judged), 3)
-        elif verified:
-            audit["support_rate"] = 1.0 if not parsed.get("removed_or_changed") else 0.0
+        else:
+            audit["claim_count"] = len(cited) if cited else 1
+            audit["supported_claim_count"] = 0
+            audit["support_rate"] = 0.0
+            unsupported = [
+                {
+                    "citation": None,
+                    "sentence": "",
+                    "supported": False,
+                    "quote": "",
+                    "reason": "Verifier returned no claim list.",
+                }
+            ]
         audit["unsupported_claims"] = unsupported
         audit["removed_or_changed"] = parsed.get("removed_or_changed") or []
         if verified:
@@ -896,6 +924,36 @@ Return JSON only.
             synthesis["answer"] = cleaned_answer or answer
     except Exception:
         synthesis["answer"] = cleaned_answer or answer
+        if audit["support_rate"] is None:
+            audit["claim_count"] = len(cited) if cited else 1
+            audit["supported_claim_count"] = 0
+            audit["support_rate"] = 0.0
+            audit["unsupported_claims"] = [
+                {
+                    "citation": None,
+                    "sentence": "",
+                    "supported": False,
+                    "quote": "",
+                    "reason": "Verifier returned no claim list.",
+                }
+            ]
+
+    if not cited:
+        audit["validity_rate"] = 0.0
+        audit["support_rate"] = 0.0
+        audit["supported_claim_count"] = 0
+        if not audit["claim_count"]:
+            audit["claim_count"] = 1
+        if not audit["unsupported_claims"]:
+            audit["unsupported_claims"] = [
+                {
+                    "citation": None,
+                    "sentence": answer[:300],
+                    "supported": False,
+                    "quote": "",
+                    "reason": "The answer has no [n] citations.",
+                }
+            ]
 
     synthesis["citation_audit"] = audit
     synthesis["verifier_removed_or_changed"] = audit["removed_or_changed"]

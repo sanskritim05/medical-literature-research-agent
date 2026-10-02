@@ -258,3 +258,91 @@ def test_verifier_rejects_support_without_exact_quote(monkeypatch):
         "Metformin lowered glucose in adults with type 2 diabetes.",
         state["articles"][0]["abstract"],
     )
+
+
+def _metformin_article() -> dict:
+    return {
+        "pmid": "111",
+        "citation_index": 1,
+        "title": "Metformin trial",
+        "abstract": "Metformin lowered glucose in adults with type 2 diabetes.",
+        "authors": [],
+        "journal": "Lancet",
+        "year": "2020",
+        "publication_types": ["Randomized Controlled Trial"],
+    }
+
+
+def test_zero_citations_fail_validity_and_support(monkeypatch):
+    payload = {
+        "verified_answer": "Statins reduce cardiovascular events.",
+        "claims": [
+            {
+                "citation": 1,
+                "sentence": "Statins reduce cardiovascular events.",
+                "supported": True,
+                "quote": "Metformin lowered glucose in adults with type 2 diabetes.",
+                "reason": "The model treated an uncited answer as supported.",
+            }
+        ],
+        "removed_or_changed": [],
+    }
+    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    state = {
+        "synthesis": {"answer": "Statins reduce cardiovascular events."},
+        "articles": [_metformin_article()],
+    }
+
+    audit = _verify_citations(state)["synthesis"]["citation_audit"]
+
+    assert audit["validity_rate"] == 0.0
+    assert audit["support_rate"] == 0.0
+    assert audit["citation_count"] == 0
+    assert audit["supported_claim_count"] == 0
+
+
+def test_missing_claim_list_fails_support(monkeypatch):
+    payload = {
+        "verified_answer": "Metformin lowered glucose [1].",
+        "removed_or_changed": [],
+    }
+    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    state = {
+        "synthesis": {"answer": "Metformin lowered glucose [1]."},
+        "articles": [_metformin_article()],
+    }
+
+    audit = _verify_citations(state)["synthesis"]["citation_audit"]
+
+    assert audit["validity_rate"] == 1.0
+    assert audit["support_rate"] == 0.0
+    assert audit["claim_count"] == 1
+    assert audit["supported_claim_count"] == 0
+    assert audit["unsupported_claims"][0]["reason"] == "Verifier returned no claim list."
+
+
+def test_claims_not_tied_to_citation_markers_are_unsupported(monkeypatch):
+    payload = {
+        "verified_answer": "Metformin lowered glucose [1].",
+        "claims": [
+            {
+                "citation": None,
+                "sentence": "Metformin lowered glucose.",
+                "supported": True,
+                "quote": "Metformin lowered glucose in adults with type 2 diabetes.",
+                "reason": "Looks supported.",
+            }
+        ],
+        "removed_or_changed": [],
+    }
+    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    state = {
+        "synthesis": {"answer": "Metformin lowered glucose [1]."},
+        "articles": [_metformin_article()],
+    }
+
+    audit = _verify_citations(state)["synthesis"]["citation_audit"]
+
+    assert audit["validity_rate"] == 1.0
+    assert audit["support_rate"] == 0.0
+    assert audit["unsupported_claims"][0]["reason"] == "Claim is not tied to a [n] citation in the answer."
