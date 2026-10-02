@@ -5,6 +5,7 @@ import math
 import os
 import re
 import threading
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,22 @@ CACHE_DIR = Path("/tmp/literature-cache") if os.getenv("VERCEL") else (BASE_DIR 
 CACHE_FILE = CACHE_DIR / "literature_cache.json"
 MAX_CACHE_ITEMS = 250
 _CACHE_LOCK = threading.Lock()
+
+REVIEW_PUBLICATION_FILTER = '"Systematic Review"[Publication Type] OR "Meta-Analysis"[Publication Type]'
+RETRACTED_EXCLUSION = '"Retracted Publication"[Publication Type] OR "Retraction of Publication"[Publication Type]'
+_DESIGN_LABELS = (
+    ("meta-analysis", "Meta-analysis"),
+    ("systematic review", "Systematic review"),
+    ("randomized controlled trial", "Randomized controlled trial"),
+    ("clinical trial", "Clinical trial"),
+    ("observational study", "Observational study"),
+    ("case-control", "Case-control study"),
+    ("case control", "Case-control study"),
+    ("cohort", "Cohort study"),
+    ("comparative study", "Comparative study"),
+    ("case reports", "Case report"),
+    ("case report", "Case report"),
+)
 
 STUDY_TYPE_FILTERS = {
     "clinical-trial": '"Clinical Trial"[Publication Type]',
@@ -176,6 +193,24 @@ def _extract_authors(article: ET.Element) -> list[str]:
     return authors
 
 
+def design_label_from_publication_types(publication_types: list[str]) -> str:
+    """Pick a study-design label from PubMed publication-type metadata only."""
+    blob = " ".join(publication_types or []).lower()
+    for key, label in _DESIGN_LABELS:
+        if key in blob:
+            return label
+    return publication_types[0] if publication_types else ""
+
+
+def is_retracted(article: dict[str, Any]) -> bool:
+    blob = " ".join(article.get("publication_types") or []).lower()
+    return "retracted publication" in blob or "retraction of publication" in blob
+
+
+def exclude_retracted(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [article for article in articles if not is_retracted(article)]
+
+
 def _extract_publication_types(article: ET.Element) -> list[str]:
     types: list[str] = []
     for item in article.findall(".//PublicationTypeList/PublicationType"):
@@ -218,7 +253,7 @@ def _extract_article_data(article: ET.Element) -> dict[str, Any]:
         "authors": authors,
         "abstract": abstract,
         "publication_types": publication_types,
-        "study_type": publication_types[0] if publication_types else "",
+        "study_type": design_label_from_publication_types(publication_types),
         "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else "",
     }
 
@@ -295,6 +330,7 @@ def _upsert_articles_in_cache(articles: list[dict[str, Any]]) -> None:
                     "year": article.get("year", ""),
                     "link": article.get("link", f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"),
                     "study_type": article.get("study_type", ""),
+                    "publication_types": article.get("publication_types") or [],
                     "abstract": abstract,
                     "embedding": _embed_text(f"{article.get('title', '')} {abstract}"),
                     "updated_at": now,
@@ -324,7 +360,8 @@ def _lookup_cached_pubmed_articles(pmids: list[str]) -> dict[str, dict[str, Any]
                 "year": item.get("year", ""),
                 "authors": [],
                 "abstract": item.get("abstract", ""),
-                "publication_types": [item.get("study_type", "")] if item.get("study_type") else [],
+                "publication_types": item.get("publication_types")
+                or ([item.get("study_type", "")] if item.get("study_type") else []),
                 "study_type": item.get("study_type", ""),
                 "link": item.get("link", f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"),
                 "cached": True,
@@ -402,17 +439,50 @@ def _normalize_trial_query(query: str) -> str:
     return " ".join(compact).strip() or query.strip()
 
 
+def _ncbi_get(url: str, params: dict[str, Any]) -> requests.Response:
+    last_error: Exception | None = None
+    for attempt in range(4):
+        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        if response.status_code == 429 and attempt < 3:
+            time.sleep(1.5 * (attempt + 1))
+            last_error = requests.HTTPError(f"429 Client Error: Too Many Requests for url: {response.url}")
+            continue
+        response.raise_for_status()
+        return response
+    raise last_error or requests.HTTPError("NCBI request failed.")
+
+
+def _esearch_pmids(term: str, retmax: int) -> list[str]:
+    esearch_params = _ncbi_params(
+        {
+            "db": "pubmed",
+            "term": term,
+            "retmode": "xml",
+            "retmax": retmax,
+            "sort": "relevance",
+        }
+    )
+    esearch_response = _ncbi_get(ESEARCH_URL, esearch_params)
+    root = ET.fromstring(esearch_response.text)
+    return [elem.text.strip() for elem in root.findall(".//IdList/Id") if elem.text]
+
+
 def search_pubmed(
     query: str,
     max_results: int = 5,
     year_from: int | None = None,
     year_to: int | None = None,
     study_type: str | None = None,
+    query_candidates: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     if not query or not query.strip():
         raise ValueError("Query must not be empty.")
 
     candidate_queries: list[str] = []
+    for candidate in query_candidates or []:
+        cleaned = str(candidate or "").strip()
+        if cleaned and cleaned not in candidate_queries:
+            candidate_queries.append(cleaned)
     normalized_query = _normalize_pubmed_query(query)
     for candidate in [normalized_query, query.strip()]:
         if candidate and candidate not in candidate_queries:
@@ -420,21 +490,20 @@ def search_pubmed(
 
     pmids: list[str] = []
     for candidate in candidate_queries:
-        esearch_params = _ncbi_params(
-            {
-                "db": "pubmed",
-                "term": _build_pubmed_term(candidate, year_from=year_from, year_to=year_to, study_type=study_type),
-                "retmode": "xml",
-                "retmax": max_results,
-                "sort": "relevance",
-            }
-        )
-        esearch_response = requests.get(ESEARCH_URL, params=esearch_params, timeout=REQUEST_TIMEOUT)
-        esearch_response.raise_for_status()
-
-        root = ET.fromstring(esearch_response.text)
-        pmids = [elem.text.strip() for elem in root.findall(".//IdList/Id") if elem.text]
-        if pmids:
+        base_term = _build_pubmed_term(candidate, year_from=year_from, year_to=year_to, study_type=study_type)
+        excluded_term = f"({base_term}) NOT ({RETRACTED_EXCLUSION})"
+        collected: list[str] = []
+        if not study_type:
+            review_term = f"({base_term}) AND ({REVIEW_PUBLICATION_FILTER}) NOT ({RETRACTED_EXCLUSION})"
+            collected = _esearch_pmids(review_term, max_results)
+        if len(collected) < max_results:
+            for pmid in _esearch_pmids(excluded_term, max_results):
+                if pmid not in collected:
+                    collected.append(pmid)
+                if len(collected) >= max_results:
+                    break
+        if collected:
+            pmids = collected
             break
 
     if not pmids:
@@ -453,8 +522,7 @@ def search_pubmed(
                 "rettype": "abstract",
             }
         )
-        efetch_response = requests.get(EFETCH_URL, params=efetch_params, timeout=REQUEST_TIMEOUT)
-        efetch_response.raise_for_status()
+        efetch_response = _ncbi_get(EFETCH_URL, efetch_params)
 
         fetch_root = ET.fromstring(efetch_response.text)
         for article in fetch_root.findall(".//PubmedArticle"):
@@ -469,7 +537,7 @@ def search_pubmed(
     ordered_articles: list[dict[str, Any]] = []
     for pmid in pmids:
         article = combined.get(pmid)
-        if article and article.get("abstract"):
+        if article and article.get("abstract") and not is_retracted(article):
             ordered_articles.append(article)
     return ordered_articles[:max_results]
 
