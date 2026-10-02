@@ -102,6 +102,53 @@ This app is configured for Vercel’s FastAPI runtime (`main.py` + `vercel.json`
 
 
 <!-- USAGE -->
+## Architecture
+
+The API still accepts the same research requests and returns the same response fields. New fields are added alongside them: `query_plan`, `comparison_query_plan`, `rankings`, and `citation_audit`. Each reference also includes `rank_score` and `rank_reason`.
+
+```mermaid
+flowchart LR
+  A[plan_query] --> B[retrieve_literature]
+  B --> C[rank_evidence]
+  C --> D[summarize_articles]
+  D --> E[synthesize]
+  E --> F[verify_citations]
+```
+
+1. **plan_query** turns the question into PICO elements, a MeSH-style PubMed query, and a shorter fallback query. If that JSON fails validation, the existing rule-based query normalizer is used.
+2. **retrieve_literature** searches PubMed with the planned query, then the fallback, then the rule-based query. ClinicalTrials.gov and the local cache still run in parallel when requested.
+3. **rank_evidence** scores study design from PubMed publication-type metadata, plus overlap with the question and recency. Retracted articles are dropped. The search asks for systematic reviews and meta-analyses first, fetches up to 15 candidates, and keeps the top 4. In compare mode, numbering continues from the primary list into the comparison list.
+4. **summarize_articles** extracts population, intervention, comparator, outcome, effect direction, and significance for each kept abstract, in parallel, with the PMID attached.
+5. **synthesize** writes the final answer only from those structured summaries. It reports how many studies support the conclusion and calls out conflicting effect directions.
+6. **verify_citations** drops citation numbers that do not match a retrieved article. A claim counts as supported only when the model quotes an exact sentence from the cited abstract. Unsupported claims are removed and the confidence score is lowered.
+
+Groq `llama-3.1-8b-instant` is the default model. Set `GROQ_MODEL` to use another model.
+
+
+## Evaluation
+
+The harness is 20 clinical questions with well-established evidence grades.
+
+```sh
+pip install pytest
+pytest tests/test_agent_pipeline.py
+python eval/run_eval.py
+```
+
+`eval/run_eval.py` writes `eval/results.json`. Each question has a `reference_conclusion`. The script grades whether the answer reaches that conclusion and prints a sample of graded answers. Trials are off. The default model is `llama-3.1-8b-instant`. That ID was not in this account's Groq model list, so the recorded runs set `GROQ_MODEL=openai/gpt-oss-20b`.
+
+| Metric | Baseline | After step 2 (same pipeline, plus correctness grade) |
+| --- | --- | --- |
+| Questions completed | 19 of 20 | 19 of 20 |
+| Citation validity | 1.000 (27/27) | 1.000 (25/25) |
+| Claim support | 0.926 (25/27) | 0.828 (24/29) |
+| Average latency | 55.13 s | 50.18 s |
+| Confidence label matches evidence grade | 0.211 (4/19) | 0.316 (6/19) |
+| Answer correctness | not measured | 0.579 (11/19) |
+
+Step 2 did not change retrieval or generation. The support-rate change is run-to-run variation. Retrieval, structured summaries, and the quote-checked verifier are in the code. The post-change eval is pending. `eval/results_baseline.json` and `eval/results_after_step2.json` hold the two rows above.
+
+
 ## Usage
 
 1. Enter a clinical question in natural language.
@@ -128,6 +175,12 @@ medical-literature-research-agent/
 ├── main.py
 ├── agent.py
 ├── pubmed_tool.py
+├── eval/
+│   ├── questions.json
+│   ├── run_eval.py
+│   └── results.json
+├── tests/
+│   └── test_agent_pipeline.py
 ├── web/                 # Evidentia React UI (Vite + plain CSS)
 │   ├── src/
 │   │   └── styles.css

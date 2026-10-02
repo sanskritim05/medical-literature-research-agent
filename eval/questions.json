@@ -1,0 +1,122 @@
+[
+  {
+    "id": "statin-secondary-prevention",
+    "question": "In adults with established coronary heart disease, do statins reduce major cardiovascular events compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Statins reduce major cardiovascular events in adults with established coronary heart disease compared with placebo."
+  },
+  {
+    "id": "ace-hfref",
+    "question": "In adults with heart failure and reduced ejection fraction, do ACE inhibitors reduce mortality compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. ACE inhibitors reduce mortality in adults with heart failure and reduced ejection fraction compared with placebo."
+  },
+  {
+    "id": "sglt2-hfref",
+    "question": "In adults with heart failure and reduced ejection fraction, do SGLT2 inhibitors reduce hospitalization for heart failure compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. SGLT2 inhibitors reduce hospitalization for heart failure in adults with HFrEF compared with placebo."
+  },
+  {
+    "id": "antibiotics-common-cold",
+    "question": "In adults with the common cold, do antibiotics shorten symptom duration compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "No. Antibiotics do not shorten symptom duration in adults with the common cold compared with placebo."
+  },
+  {
+    "id": "smoking-cessation-lung-cancer",
+    "question": "Does smoking cessation reduce the risk of lung cancer compared with continued smoking?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Smoking cessation reduces the risk of lung cancer compared with continued smoking."
+  },
+  {
+    "id": "influenza-vaccine",
+    "question": "In healthy adults, does inactivated influenza vaccine reduce laboratory-confirmed influenza compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Inactivated influenza vaccine reduces laboratory-confirmed influenza in healthy adults compared with placebo."
+  },
+  {
+    "id": "ics-asthma",
+    "question": "In adolescents and adults with persistent asthma, do inhaled corticosteroids improve asthma control compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Inhaled corticosteroids improve asthma control in adolescents and adults with persistent asthma compared with placebo."
+  },
+  {
+    "id": "thrombolysis-stemi",
+    "question": "In adults with ST-elevation myocardial infarction, does timely fibrinolytic therapy reduce mortality compared with no reperfusion therapy?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Timely fibrinolytic therapy reduces mortality in adults with STEMI compared with no reperfusion therapy."
+  },
+  {
+    "id": "metformin-t2d",
+    "question": "In adults with type 2 diabetes, does metformin lower HbA1c compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Metformin lowers HbA1c in adults with type 2 diabetes compared with placebo."
+  },
+  {
+    "id": "beta-blocker-post-mi",
+    "question": "In adults after myocardial infarction, do beta blockers reduce mortality compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Beta blockers reduce mortality after myocardial infarction compared with placebo."
+  },
+  {
+    "id": "warfarin-af-stroke",
+    "question": "In adults with nonvalvular atrial fibrillation, does warfarin reduce ischemic stroke compared with placebo or no anticoagulation?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Warfarin reduces ischemic stroke in adults with nonvalvular atrial fibrillation compared with placebo or no anticoagulation."
+  },
+  {
+    "id": "ppi-peptic-ulcer",
+    "question": "In adults with peptic ulcer disease, do proton pump inhibitors heal ulcers compared with placebo?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Proton pump inhibitors heal peptic ulcers in adults compared with placebo."
+  },
+  {
+    "id": "combined-ocp-vte",
+    "question": "Do combined oral contraceptives increase the risk of venous thromboembolism compared with non-use?",
+    "expected_strength": "High",
+    "reference_conclusion": "Yes. Combined oral contraceptives increase the risk of venous thromboembolism compared with non-use."
+  },
+  {
+    "id": "mammography-50-69",
+    "question": "In women aged 50 to 69, does screening mammography reduce breast cancer mortality?",
+    "expected_strength": "Moderate",
+    "reference_conclusion": "Yes. Screening mammography reduces breast cancer mortality in women aged 50 to 69, with a moderate absolute benefit."
+  },
+  {
+    "id": "aspirin-primary-prevention",
+    "question": "In adults at low cardiovascular risk without prior cardiovascular disease, does aspirin for primary prevention reduce cardiovascular events enough to outweigh major bleeding?",
+    "expected_strength": "Moderate",
+    "reference_conclusion": "No. In low-risk adults without prior cardiovascular disease, aspirin does not reduce cardiovascular events enough to outweigh major bleeding."
+  },
+  {
+    "id": "vitamin-d-fracture",
+    "question": "In community-dwelling older adults without known vitamin D deficiency, does vitamin D supplementation prevent fractures compared with placebo?",
+    "expected_strength": "Moderate",
+    "reference_conclusion": "No. Vitamin D supplementation does not prevent fractures in community-dwelling older adults without known deficiency compared with placebo."
+  },
+  {
+    "id": "bed-rest-low-back-pain",
+    "question": "In adults with acute nonspecific low back pain, is bed rest better than staying active for pain and function?",
+    "expected_strength": "High",
+    "reference_conclusion": "No. Bed rest is not better than staying active for pain or function in adults with acute nonspecific low back pain."
+  },
+  {
+    "id": "antibiotics-otitis",
+    "question": "In children with uncomplicated acute otitis media, do immediate antibiotics meaningfully reduce pain compared with watchful waiting?",
+    "expected_strength": "Moderate",
+    "reference_conclusion": "No. Immediate antibiotics do not meaningfully reduce pain in uncomplicated acute otitis media; any benefit over watchful waiting is small."
+  },
+  {
+    "id": "vitamin-c-cold",
+    "question": "In the general population, does regular vitamin C supplementation prevent the common cold compared with placebo?",
+    "expected_strength": "Moderate",
+    "reference_conclusion": "No. Regular vitamin C supplementation does not prevent the common cold in the general population compared with placebo."
+  },
+  {
+    "id": "opioids-chronic-pain",
+    "question": "In adults with chronic noncancer pain, do long-term opioids provide a large improvement in pain and function compared with non-opioid therapy?",
+    "expected_strength": "Moderate",
+    "reference_conclusion": "No. Long-term opioids do not provide a large improvement in pain or function for chronic noncancer pain compared with non-opioid therapy."
+  }
+]

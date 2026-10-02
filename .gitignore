@@ -16,3 +16,5 @@ ENV/
 web/node_modules/
 frontend_dist/
 public/
+pubmedqa/
+eval_results_live.json
