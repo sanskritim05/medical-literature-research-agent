@@ -124,6 +124,16 @@ def test_safe_json_loads_returns_none_for_invalid_text():
     assert _safe_json_loads('["not", "an", "object"]') is None
 
 
+def test_safe_json_loads_strips_code_fence():
+    parsed = _safe_json_loads(
+        '```json\n{"verified_answer": "ok", "claims": [], "removed_or_changed": []}\n```'
+    )
+
+    assert parsed is not None
+    assert parsed["verified_answer"] == "ok"
+    assert parsed["claims"] == []
+
+
 def test_query_plan_falls_back_when_llm_json_fails_validation():
     plan = _coerce_query_plan(
         "Does metformin lower blood glucose in type 2 diabetes?",
@@ -346,3 +356,105 @@ def test_claims_not_tied_to_citation_markers_are_unsupported(monkeypatch):
     assert audit["validity_rate"] == 1.0
     assert audit["support_rate"] == 0.0
     assert audit["unsupported_claims"][0]["reason"] == "Claim is not tied to a [n] citation in the answer."
+
+
+def test_verifier_retries_once_when_the_first_reply_is_not_json(monkeypatch):
+    good = {
+        "verified_answer": "Metformin lowered glucose [1].",
+        "claims": [
+            {
+                "citation": 1,
+                "sentence": "Metformin lowered glucose [1].",
+                "supported": True,
+                "quote": "Metformin lowered glucose in adults with type 2 diabetes.",
+                "reason": "The abstract states this.",
+            }
+        ],
+        "removed_or_changed": [],
+    }
+    replies = iter(["Here is my review, not JSON.", "```json\n" + json.dumps(good) + "\n```"])
+    prompts: list[str] = []
+
+    def fake_invoke(messages):
+        prompts.append(messages[0].content)
+        return _FakeResponse(next(replies))
+
+    monkeypatch.setattr("agent._invoke_llm", fake_invoke)
+    state = {
+        "synthesis": {"answer": "Metformin lowered glucose [1]."},
+        "articles": [_metformin_article()],
+    }
+
+    audit = _verify_citations(state)["synthesis"]["citation_audit"]
+
+    assert len(prompts) == 2
+    assert "one JSON object only" in prompts[1]
+    assert audit["support_rate"] == 1.0
+    assert audit["supported_claim_count"] == 1
+
+
+def test_quote_match_ignores_hyphen_case_and_trailing_punctuation():
+    abstract = (
+        "Low-intensity anticoagulation with warfarin prevented cerebral infarction "
+        "in patients with nonrheumatic atrial fibrillation without producing an excess risk of major hemorrhage. "
+        "Giving anticoagulants to older people with concomitant atrial fibrillation and chronic kidney disease "
+        "was associated with an increased rate of ischaemic stroke and haemorrhage but a paradoxical lowered rate of all cause mortality."
+    )
+    hyphen_quote = (
+        "Low\u2011intensity anticoagulation with warfarin prevented cerebral infarction "
+        "in patients with nonrheumatic atrial fibrillation without producing an excess risk of major hemorrhage."
+    )
+    truncated_quote = (
+        "Giving anticoagulants to older people with concomitant atrial fibrillation and chronic kidney disease "
+        "was associated with an increased rate of ischaemic stroke and haemorrhage."
+    )
+
+    assert quote_in_abstract(hyphen_quote, abstract) is True
+    assert quote_in_abstract(truncated_quote.upper(), abstract) is True
+    assert quote_in_abstract("This sentence was paraphrased and is not in the abstract.", abstract) is False
+
+
+def test_off_topic_review_ranks_below_on_topic_trial():
+    question = "In adults with coronary heart disease, do statins reduce events compared with placebo?"
+    plan = {
+        "population": "adults with coronary heart disease",
+        "intervention": "statins",
+        "comparison": "placebo",
+    }
+    review = {
+        "pmid": "1",
+        "title": "Niacin for primary prevention of cardiovascular events",
+        "abstract": "This systematic review of niacin found no clear benefit.",
+        "year": "2024",
+        "publication_types": ["Meta-Analysis"],
+    }
+    trial = {
+        "pmid": "2",
+        "title": "Statin therapy after coronary disease",
+        "abstract": "Adults with coronary heart disease were assigned to a statin or placebo.",
+        "year": "2010",
+        "publication_types": ["Randomized Controlled Trial"],
+    }
+
+    without_plan = rank_articles([review, trial], question, now_year=2024)
+    with_plan = rank_articles([review, trial], question, now_year=2024, plan=plan)
+
+    assert without_plan[0]["pmid"] == "1"
+    assert with_plan[0]["pmid"] == "2"
+    assert "off-topic" in with_plan[1]["rank_reason"]
+    assert "on-topic" in with_plan[0]["rank_reason"]
+
+
+def test_confidence_capped_at_low_when_claim_support_is_zero():
+    confidence = _apply_citation_confidence(
+        {"score": 0.9, "label": "High", "rationale": "A review was retrieved."},
+        {
+            "invalid_citations": [],
+            "unsupported_claims": [{"citation": 1, "supported": False}],
+            "support_rate": 0.0,
+        },
+    )
+
+    assert confidence["label"] == "Low"
+    assert confidence["score"] <= 0.49
+    assert "capped at Low" in confidence["rationale"]

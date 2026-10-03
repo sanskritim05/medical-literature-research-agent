@@ -103,14 +103,14 @@ def _invoke_llm(messages: list[Any]) -> Any:
     raise last_error or RuntimeError("LLM call failed.")
 
 
-def _safe_json_loads(content: str) -> dict[str, Any] | None:
+def _json_object(text: str) -> dict[str, Any] | None:
     try:
-        data = json.loads(content)
+        data = json.loads(text)
         return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
         pass
 
-    match = re.search(r"\{.*\}", content, re.DOTALL)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         return None
     try:
@@ -118,6 +118,18 @@ def _safe_json_loads(content: str) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
         return None
+
+
+def _safe_json_loads(content: str) -> dict[str, Any] | None:
+    text = str(content or "").strip()
+    if not text:
+        return None
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        parsed = _json_object(fenced.group(1).strip())
+        if parsed is not None:
+            return parsed
+    return _json_object(text)
 
 
 _DESIGN_TIERS: list[tuple[float, str, tuple[str, ...]]] = [
@@ -219,18 +231,83 @@ def recency_score(article: dict[str, Any], now_year: int | None = None) -> float
     return max(0.0, round(2.0 - age * 0.08, 3))
 
 
-def rank_articles(articles: list[dict[str, Any]], question: str, now_year: int | None = None) -> list[dict[str, Any]]:
+def _term_in_document(term: str, document: set[str]) -> bool:
+    if term in document:
+        return True
+    for token in document:
+        shorter, longer = (term, token) if len(term) <= len(token) else (token, term)
+        if len(shorter) >= 4 and longer.startswith(shorter):
+            return True
+    return False
+
+
+def pico_alignment(article: dict[str, Any], plan: dict[str, Any] | None) -> tuple[bool | None, str]:
+    """Score whether population, intervention, and comparator match the planned PICO.
+
+    None means the plan did not name those elements, so ranking stays design-based.
+    """
+    if not isinstance(plan, dict):
+        return None, ""
+    fields = (
+        ("population", plan.get("population")),
+        ("intervention", plan.get("intervention")),
+        ("comparator", plan.get("comparison")),
+    )
+    document = set(
+        re.findall(
+            r"[a-z0-9]+",
+            f"{article.get('title') or ''} {article.get('abstract') or ''}".lower(),
+        )
+    )
+    considered: list[str] = []
+    matched: list[str] = []
+    for name, value in fields:
+        terms = {
+            token
+            for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+            if len(token) > 3 and token not in _RELEVANCE_STOPWORDS
+        }
+        if not terms:
+            continue
+        considered.append(name)
+        hits = sum(1 for term in terms if _term_in_document(term, document))
+        if hits / len(terms) >= 0.5:
+            matched.append(name)
+    if not considered:
+        return None, ""
+    required = min(2, len(considered))
+    on_topic = len(matched) >= required and ("intervention" not in considered or "intervention" in matched)
+    detail = f"pico matched {', '.join(matched) or 'none'} of {', '.join(considered)}"
+    return on_topic, detail
+
+
+def rank_articles(
+    articles: list[dict[str, Any]],
+    question: str,
+    now_year: int | None = None,
+    plan: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
     for article in articles:
         design, design_label = study_design_score(article)
         relevance = relevance_score(question, article)
         recency = recency_score(article, now_year=now_year)
-        score = round(design * 2 + relevance * 2 + recency, 3)
+        on_topic, pico_detail = pico_alignment(article, plan)
+        # An off-topic review keeps no design bonus, so an on-topic trial ranks above it.
+        design_weight = 0.0 if on_topic is False else design
+        score = round(design_weight * 2 + relevance * 2 + recency, 3)
+        if on_topic is True:
+            topic_label = "on-topic"
+        elif on_topic is False:
+            topic_label = "off-topic"
+        else:
+            topic_label = "no PICO plan"
+        reason = f"design={design_label} ({design}), relevance={relevance:.2f}, recency={recency:.2f}, {topic_label}"
+        if pico_detail:
+            reason = f"{reason}; {pico_detail}"
         updated = dict(article)
         updated["rank_score"] = score
-        updated["rank_reason"] = (
-            f"design={design_label} ({design}), relevance={relevance:.2f}, recency={recency:.2f}"
-        )
+        updated["rank_reason"] = reason
         ranked.append(updated)
     ranked.sort(key=lambda item: item["rank_score"], reverse=True)
     return ranked
@@ -512,10 +589,34 @@ def _normalize_significance(value: Any) -> str:
     return text if text in allowed else "not reported"
 
 
+def _normalize_quote_text(text: str) -> str:
+    """Fold case, whitespace, dashes, and other punctuation before a quote comparison."""
+    folded = (text or "").translate(
+        str.maketrans(
+            {
+                "\u00ad": "",
+                "\u2010": "-",
+                "\u2011": "-",
+                "\u2012": "-",
+                "\u2013": "-",
+                "\u2014": "-",
+                "\u2212": "-",
+            }
+        )
+    )
+    folded = folded.lower()
+    folded = re.sub(r"[^a-z0-9]+", " ", folded)
+    return re.sub(r"\s+", " ", folded).strip()
+
+
 def quote_in_abstract(quote: str, abstract: str) -> bool:
-    """A supporting quote must be a verbatim stretch of the cited abstract."""
-    normalized_quote = re.sub(r"\s+", " ", quote or "").strip().lower()
-    normalized_abstract = re.sub(r"\s+", " ", abstract or "").strip().lower()
+    """A supporting quote must be a verbatim stretch of the cited abstract.
+
+    Case, whitespace, and punctuation are ignored so a non-breaking hyphen or a
+    trailing period does not reject a sentence that is otherwise copied.
+    """
+    normalized_quote = _normalize_quote_text(quote)
+    normalized_abstract = _normalize_quote_text(abstract)
     if len(normalized_quote) < 20 or not normalized_abstract:
         return False
     return normalized_quote in normalized_abstract
@@ -602,22 +703,31 @@ Return valid JSON:
 
 def _apply_citation_confidence(confidence: dict[str, Any], audit: dict[str, Any]) -> dict[str, Any]:
     failures = len(audit.get("invalid_citations") or []) + len(audit.get("unsupported_claims") or [])
-    if not failures:
+    zero_support = audit.get("support_rate") == 0
+    if not failures and not zero_support:
         return confidence
     updated = dict(confidence)
-    score = max(0.05, round(float(updated.get("score") or 0) - 0.1 * failures, 2))
-    if score >= 0.75:
-        label = "High"
-    elif score >= 0.5:
-        label = "Moderate"
-    else:
-        label = "Low"
-    updated["score"] = score
-    updated["label"] = label
-    updated["citation_penalty"] = failures
-    rationale = str(updated.get("rationale") or "").strip()
-    penalty_note = f" Citation check lowered confidence after {failures} unsupported or invalid citation(s)."
-    updated["rationale"] = f"{rationale}{penalty_note}".strip()
+    if failures:
+        score = max(0.05, round(float(updated.get("score") or 0) - 0.1 * failures, 2))
+        if score >= 0.75:
+            label = "High"
+        elif score >= 0.5:
+            label = "Moderate"
+        else:
+            label = "Low"
+        updated["score"] = score
+        updated["label"] = label
+        updated["citation_penalty"] = failures
+        rationale = str(updated.get("rationale") or "").strip()
+        penalty_note = f" Citation check lowered confidence after {failures} unsupported or invalid citation(s)."
+        updated["rationale"] = f"{rationale}{penalty_note}".strip()
+    if zero_support:
+        updated["score"] = min(float(updated.get("score") or 0), 0.49)
+        updated["label"] = "Low"
+        rationale = str(updated.get("rationale") or "").strip()
+        cap_note = " Claim support was zero, so confidence is capped at Low."
+        if cap_note.strip() not in rationale:
+            updated["rationale"] = f"{rationale}{cap_note}".strip()
     return updated
 
 
@@ -673,8 +783,16 @@ def _retrieve_literature(state: ResearchState) -> ResearchState:
 def _rank_evidence(state: ResearchState) -> ResearchState:
     keep = min(int(state.get("max_results") or MAX_ARTICLE_SUMMARIES), MAX_ARTICLE_SUMMARIES)
     keep = max(1, keep)
-    primary = rank_articles(state.get("articles") or [], state["question"])[:keep]
-    comparison = rank_articles(state.get("comparison_articles") or [], state.get("comparison_question") or state["question"])
+    primary = rank_articles(
+        state.get("articles") or [],
+        state["question"],
+        plan=state.get("query_plan"),
+    )[:keep]
+    comparison = rank_articles(
+        state.get("comparison_articles") or [],
+        state.get("comparison_question") or state["question"],
+        plan=state.get("comparison_query_plan") or state.get("query_plan"),
+    )
     if state.get("mode") == "compare":
         comparison = comparison[:keep]
     else:
@@ -804,6 +922,28 @@ Return JSON only.
     return {"synthesis": parsed}
 
 
+def _invoke_verifier(system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    """Ask the fact-checker for JSON, then retry once if the reply has no claim list."""
+
+    def _read(prompt: str) -> dict[str, Any] | None:
+        response = _invoke_llm([SystemMessage(content=prompt), HumanMessage(content=user_prompt)])
+        parsed = _safe_json_loads(getattr(response, "content", ""))
+        if isinstance(parsed, dict) and isinstance(parsed.get("claims"), list):
+            return parsed
+        return None
+
+    parsed = _read(system_prompt)
+    if parsed is not None:
+        return parsed
+    strict_prompt = (
+        system_prompt
+        + "\n\nYour previous reply was not a JSON object with a claims array. "
+        + "Reply with one JSON object only. Do not use markdown code fences. "
+        + "The object must include a claims array."
+    )
+    return _read(strict_prompt) or {}
+
+
 def _verify_citations(state: ResearchState) -> ResearchState:
     """Check that each [n] citation exists and that the cited abstract supports the sentence.
 
@@ -897,8 +1037,7 @@ Source abstracts. Use the printed citation numbers, which do not restart for com
 
 Return JSON only.
 """.strip()
-        response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-        parsed = _safe_json_loads(getattr(response, "content", "")) or {}
+        parsed = _invoke_verifier(system_prompt, user_prompt)
         verified = str(parsed.get("verified_answer") or "").strip()
         claims = [item for item in parsed.get("claims") or [] if isinstance(item, dict)]
         abstracts_by_index = {
