@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -26,6 +27,8 @@ from pubmed_tool import (
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 
 class ResearchState(TypedDict, total=False):
     question: str
@@ -44,6 +47,7 @@ class ResearchState(TypedDict, total=False):
     comparison_query_plan: dict[str, Any]
     article_summaries: list[dict[str, str]]
     synthesis: dict[str, Any]
+    needs_expert_review: bool
 
 
 MAX_ARTICLE_SUMMARIES = int(os.getenv("MAX_ARTICLE_SUMMARIES", "4"))
@@ -56,7 +60,7 @@ _SUMMARY_CACHE_PATH = (
 )
 
 
-def _build_llm():
+def _build_llm(max_tokens: int | None = None):
     provider = os.getenv("LLM_PROVIDER", "groq").strip().lower()
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 
@@ -75,7 +79,10 @@ def _build_llm():
         raise RuntimeError("GROQ_API_KEY is missing. Add it to your .env file or Vercel environment variables.")
 
     model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-    return ChatGroq(groq_api_key=api_key, model_name=model, temperature=temperature)
+    kwargs: dict[str, Any] = {"groq_api_key": api_key, "model_name": model, "temperature": temperature}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return ChatGroq(**kwargs)
 
 
 def _retry_delay_seconds(exc: Exception, attempt: int) -> float:
@@ -87,12 +94,56 @@ def _retry_delay_seconds(exc: Exception, attempt: int) -> float:
     return float(2 ** attempt)
 
 
+def _response_text(response: Any) -> str:
+    content = getattr(response, "content", "")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                parts.append(str(item.get("text") or ""))
+        return "".join(parts)
+    return str(content or "")
+
+
+def _response_metadata(response: Any) -> dict[str, Any]:
+    meta = getattr(response, "response_metadata", None) or {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _reply_was_cut_off(response: Any) -> bool:
+    if _response_text(response).strip():
+        return False
+    meta = _response_metadata(response)
+    usage = meta.get("token_usage") or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    details = usage.get("completion_tokens_details") or {}
+    reasoning = int(details.get("reasoning_tokens") or 0) if isinstance(details, dict) else 0
+    completion = int(usage.get("completion_tokens") or 0)
+    finish = str(meta.get("finish_reason") or "")
+    return finish == "length" or (completion > 0 and reasoning >= completion)
+
+
 def _invoke_llm(messages: list[Any]) -> Any:
     llm = _build_llm()
     last_error: Exception | None = None
     for attempt in range(5):
         try:
-            return llm.invoke(messages)
+            response = llm.invoke(messages)
+            if not _response_text(response).strip():
+                meta = _response_metadata(response)
+                logger.warning(
+                    "Empty model reply finish_reason=%s token_usage=%s",
+                    meta.get("finish_reason"),
+                    meta.get("token_usage"),
+                )
+                if _reply_was_cut_off(response):
+                    higher = 4096
+                    logger.warning("Empty reply was cut off; retrying with max_tokens=%s", higher)
+                    return _build_llm(max_tokens=higher).invoke(messages)
+            return response
         except Exception as exc:
             last_error = exc
             message = str(exc).lower()
@@ -590,7 +641,7 @@ def _normalize_significance(value: Any) -> str:
 
 
 def _normalize_quote_text(text: str) -> str:
-    """Fold case, whitespace, dashes, and other punctuation before a quote comparison."""
+    """Fold case, whitespace, dashes, punctuation, and a few spelling variants."""
     folded = (text or "").translate(
         str.maketrans(
             {
@@ -605,6 +656,12 @@ def _normalize_quote_text(text: str) -> str:
         )
     )
     folded = folded.lower()
+    for british, american in (
+        ("haemorrhage", "hemorrhage"),
+        ("anaemia", "anemia"),
+        ("oedema", "edema"),
+    ):
+        folded = folded.replace(british, american)
     folded = re.sub(r"[^a-z0-9]+", " ", folded)
     return re.sub(r"\s+", " ", folded).strip()
 
@@ -612,8 +669,8 @@ def _normalize_quote_text(text: str) -> str:
 def quote_in_abstract(quote: str, abstract: str) -> bool:
     """A supporting quote must be a verbatim stretch of the cited abstract.
 
-    Case, whitespace, and punctuation are ignored so a non-breaking hyphen or a
-    trailing period does not reject a sentence that is otherwise copied.
+    Case, whitespace, punctuation, and British/American spellings such as
+    haemorrhage/hemorrhage are ignored so a copied sentence still matches.
     """
     normalized_quote = _normalize_quote_text(quote)
     normalized_abstract = _normalize_quote_text(abstract)
@@ -780,6 +837,36 @@ def _retrieve_literature(state: ResearchState) -> ResearchState:
         return result
 
 
+def _top_articles_match_pico(articles: list[dict[str, Any]], plan: dict[str, Any] | None) -> bool:
+    """True when at least one kept article matches the planned PICO, or no PICO was planned."""
+    if not articles:
+        return True
+    alignments = [pico_alignment(article, plan)[0] for article in articles]
+    if all(value is None for value in alignments):
+        return True
+    return any(value is True for value in alignments)
+
+
+def _abstain_synthesis() -> dict[str, Any]:
+    answer = "The retrieved evidence does not address the question. This answer needs expert review."
+    return {
+        "answer": answer,
+        "plain_language_summary": answer,
+        "needs_expert_review": True,
+        "citation_audit": {
+            "validity_rate": None,
+            "citation_count": 0,
+            "valid_citation_count": 0,
+            "invalid_citations": [],
+            "support_rate": None,
+            "claim_count": 0,
+            "supported_claim_count": 0,
+            "unsupported_claims": [],
+            "removed_or_changed": [],
+        },
+    }
+
+
 def _rank_evidence(state: ResearchState) -> ResearchState:
     keep = min(int(state.get("max_results") or MAX_ARTICLE_SUMMARIES), MAX_ARTICLE_SUMMARIES)
     keep = max(1, keep)
@@ -798,7 +885,20 @@ def _rank_evidence(state: ResearchState) -> ResearchState:
     else:
         comparison = []
     primary, comparison = assign_citation_indexes(primary, comparison)
-    return {"articles": primary, "comparison_articles": comparison}
+    if _top_articles_match_pico(primary, state.get("query_plan")):
+        return {"articles": primary, "comparison_articles": comparison, "needs_expert_review": False}
+    return {
+        "articles": primary,
+        "comparison_articles": comparison,
+        "needs_expert_review": True,
+        "synthesis": _abstain_synthesis(),
+    }
+
+
+def _route_after_rank(state: ResearchState) -> str:
+    if state.get("needs_expert_review"):
+        return "abstain"
+    return "summarize"
 
 
 def _summarize_articles(state: ResearchState) -> ResearchState:
@@ -1151,7 +1251,11 @@ def _build_graph():
     graph.add_edge(START, "plan_query")
     graph.add_edge("plan_query", "retrieve_literature")
     graph.add_edge("retrieve_literature", "rank_evidence")
-    graph.add_edge("rank_evidence", "summarize_articles")
+    graph.add_conditional_edges(
+        "rank_evidence",
+        _route_after_rank,
+        {"summarize": "summarize_articles", "abstain": END},
+    )
     graph.add_edge("summarize_articles", "synthesize")
     graph.add_edge("synthesize", "verify_citations")
     graph.add_edge("verify_citations", END)
@@ -1217,6 +1321,13 @@ def run_research(
         "removed_or_changed": synthesis.get("verifier_removed_or_changed") or [],
     }
     confidence = _apply_citation_confidence(confidence, citation_audit)
+    if result.get("needs_expert_review"):
+        confidence["label"] = "Low"
+        confidence["review_status"] = "needs expert review"
+        rationale = str(confidence.get("rationale") or "").strip()
+        review_note = " The retrieved evidence does not address the question, so this needs expert review."
+        if review_note.strip() not in rationale:
+            confidence["rationale"] = f"{rationale}{review_note}".strip()
 
     comparison_references: list[dict[str, Any]] = []
     if mode == "compare":
@@ -1255,6 +1366,7 @@ def run_research(
         "filters": filters,
         "query_plan": result.get("query_plan") or {},
         "comparison_query_plan": result.get("comparison_query_plan") or {},
+        "needs_expert_review": bool(result.get("needs_expert_review")),
         "rankings": ranking_rows(articles, "primary") + ranking_rows(comparison_articles, "comparison"),
         "citation_audit": citation_audit,
     }

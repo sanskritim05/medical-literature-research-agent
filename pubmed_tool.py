@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ MAX_CACHE_ITEMS = 250
 _CACHE_LOCK = threading.Lock()
 
 REVIEW_PUBLICATION_FILTER = '"Systematic Review"[Publication Type] OR "Meta-Analysis"[Publication Type]'
+RCT_PUBLICATION_FILTER = '"Randomized Controlled Trial"[Publication Type]'
 RETRACTED_EXCLUSION = '"Retracted Publication"[Publication Type] OR "Retraction of Publication"[Publication Type]'
 _DESIGN_LABELS = (
     ("meta-analysis", "Meta-analysis"),
@@ -480,6 +482,7 @@ def _retrieval_cache_key(
         "year_from": year_from,
         "year_to": year_to,
         "study_type": study_type or "",
+        "retrieval": "review-and-rct",
     }
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -505,6 +508,22 @@ def _write_retrieval_cache(cache: dict[str, Any]) -> None:
         return
 
 
+def _review_and_rct_pmids(base_term: str, max_results: int) -> list[str]:
+    """Search systematic reviews and randomized trials at the same time and merge the ids."""
+    review_term = f"({base_term}) AND ({REVIEW_PUBLICATION_FILTER}) NOT ({RETRACTED_EXCLUSION})"
+    rct_term = f"({base_term}) AND ({RCT_PUBLICATION_FILTER}) NOT ({RETRACTED_EXCLUSION})"
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        review_future = executor.submit(_esearch_pmids, review_term, max_results)
+        rct_future = executor.submit(_esearch_pmids, rct_term, max_results)
+        reviews = review_future.result()
+        trials = rct_future.result()
+    merged: list[str] = []
+    for pmid in list(reviews) + list(trials):
+        if pmid not in merged:
+            merged.append(pmid)
+    return merged
+
+
 def search_pubmed(
     query: str,
     max_results: int = 5,
@@ -520,7 +539,7 @@ def search_pubmed(
     with _CACHE_LOCK:
         cached_result = _read_retrieval_cache().get(cache_key)
     if isinstance(cached_result, list) and cached_result:
-        return exclude_retracted(cached_result)[:max_results]
+        return exclude_retracted(cached_result)[: max_results * 2]
 
     candidate_queries: list[str] = []
     for candidate in query_candidates or []:
@@ -535,19 +554,14 @@ def search_pubmed(
     pmids: list[str] = []
     for candidate in candidate_queries:
         base_term = _build_pubmed_term(candidate, year_from=year_from, year_to=year_to, study_type=study_type)
-        excluded_term = f"({base_term}) NOT ({RETRACTED_EXCLUSION})"
-        collected: list[str] = []
-        if not study_type:
-            review_term = f"({base_term}) AND ({REVIEW_PUBLICATION_FILTER}) NOT ({RETRACTED_EXCLUSION})"
-            collected = _esearch_pmids(review_term, max_results)
-        if len(collected) < max_results:
-            for pmid in _esearch_pmids(excluded_term, max_results):
-                if pmid not in collected:
-                    collected.append(pmid)
-                if len(collected) >= max_results:
-                    break
-        if collected:
+        if study_type:
+            excluded_term = f"({base_term}) NOT ({RETRACTED_EXCLUSION})"
+            collected = _esearch_pmids(excluded_term, max_results)
+        else:
+            collected = _review_and_rct_pmids(base_term, max_results)
+        if len(collected) > len(pmids):
             pmids = collected
+        if len(pmids) >= max_results:
             break
 
     if not pmids:
@@ -583,7 +597,7 @@ def search_pubmed(
         article = combined.get(pmid)
         if article and article.get("abstract") and not is_retracted(article):
             ordered_articles.append(article)
-    ordered_articles = ordered_articles[:max_results]
+    ordered_articles = ordered_articles[: max_results * 2]
     if ordered_articles:
         with _CACHE_LOCK:
             cache = _read_retrieval_cache()

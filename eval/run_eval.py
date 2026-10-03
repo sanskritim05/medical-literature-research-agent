@@ -36,15 +36,21 @@ def _rate(numerator: int, denominator: int) -> float | None:
 
 
 def grade_answer(question: str, reference_conclusion: str, answer: str) -> dict:
-    """Ask the model whether the answer reaches the same conclusion as the reference."""
+    """Ask the model whether the answer matches, abstains, or contradicts the reference."""
     if not answer.strip() or not reference_conclusion.strip():
-        return {"answer_correct": None, "answer_grade_reason": "Missing answer or reference conclusion."}
+        return {
+            "answer_grade": "wrong",
+            "answer_correct": False,
+            "answer_grade_reason": "Missing answer or reference conclusion.",
+        }
     system_prompt = """
 You grade a medical research answer against a reference conclusion.
-Judge only the bottom-line direction (benefit, harm, or no meaningful benefit).
-Ignore wording, citations, and extra caveats when the direction still matches.
-correct is false when the answer is empty, answers a different question, or reaches the opposite conclusion.
-Return valid JSON only: {"correct": true, "reason": "one sentence"}
+Return exactly one grade:
+- correct: the bottom-line direction matches the reference (benefit, harm, or no meaningful benefit).
+- abstained: the answer says the retrieved evidence does not address the question, or it declines to give a conclusion.
+- wrong: the answer is empty, answers a different question, or reaches a different conclusion.
+Ignore wording and citations when the direction still matches.
+Return valid JSON only: {"grade": "correct", "reason": "one sentence"}
 """.strip()
     user_prompt = (
         f"Question: {question}\n\n"
@@ -54,15 +60,30 @@ Return valid JSON only: {"correct": true, "reason": "one sentence"}
     try:
         response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         parsed = _safe_json_loads(getattr(response, "content", "")) or {}
-        correct = parsed.get("correct")
-        if not isinstance(correct, bool):
-            return {"answer_correct": None, "answer_grade_reason": "Grader did not return a boolean."}
+        grade = str(parsed.get("grade") or "").strip().lower()
+        if grade not in {"correct", "abstained", "wrong"}:
+            legacy = parsed.get("correct")
+            if legacy is True:
+                grade = "correct"
+            elif legacy is False:
+                grade = "wrong"
+            else:
+                return {
+                    "answer_grade": None,
+                    "answer_correct": None,
+                    "answer_grade_reason": "Grader did not return correct, abstained, or wrong.",
+                }
         return {
-            "answer_correct": correct,
+            "answer_grade": grade,
+            "answer_correct": True if grade == "correct" else (False if grade == "wrong" else None),
             "answer_grade_reason": str(parsed.get("reason") or "").strip(),
         }
     except Exception as exc:
-        return {"answer_correct": None, "answer_grade_reason": f"{type(exc).__name__}: {exc}"}
+        return {
+            "answer_grade": None,
+            "answer_correct": None,
+            "answer_grade_reason": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def evaluate_question(item: dict, *, max_results: int) -> dict:
@@ -78,7 +99,14 @@ def evaluate_question(item: dict, *, max_results: int) -> dict:
         audit = result.get("citation_audit") or {}
         label = str((result.get("confidence") or {}).get("label") or "")
         answer = str(result.get("answer") or "").strip()
-        grade = grade_answer(item["question"], item.get("reference_conclusion") or "", answer)
+        if result.get("needs_expert_review"):
+            grade = {
+                "answer_grade": "abstained",
+                "answer_correct": None,
+                "answer_grade_reason": "The retrieved articles did not match the planned PICO, so the pipeline skipped synthesis.",
+            }
+        else:
+            grade = grade_answer(item["question"], item.get("reference_conclusion") or "", answer)
         return {
             "id": item["id"],
             "question": item["question"],
@@ -87,6 +115,7 @@ def evaluate_question(item: dict, *, max_results: int) -> dict:
             "answer": answer,
             "confidence_label": label,
             "confidence_matches_expected": label == item["expected_strength"],
+            "needs_expert_review": bool(result.get("needs_expert_review")),
             "latency_seconds": latency,
             "citation_count": int(audit.get("citation_count") or 0),
             "valid_citation_count": int(audit.get("valid_citation_count") or 0),
@@ -95,6 +124,7 @@ def evaluate_question(item: dict, *, max_results: int) -> dict:
             "validity_rate": audit.get("validity_rate"),
             "support_rate": audit.get("support_rate"),
             "unsupported_claims": audit.get("unsupported_claims") or [],
+            "answer_grade": grade["answer_grade"],
             "answer_correct": grade["answer_correct"],
             "answer_grade_reason": grade["answer_grade_reason"],
             "error": None,
@@ -116,23 +146,27 @@ def evaluate_question(item: dict, *, max_results: int) -> dict:
             "validity_rate": None,
             "support_rate": None,
             "unsupported_claims": [],
+            "answer_grade": None,
             "answer_correct": None,
             "answer_grade_reason": "",
+            "needs_expert_review": False,
             "error": f"{type(exc).__name__}: {exc}",
         }
 
 
 def _write_results(rows: list[dict], questions: list[dict], max_results: int, *, results_path: Path) -> dict:
     completed = [row for row in rows if not row["error"]]
-    citation_total = sum(row["citation_count"] for row in completed)
-    valid_total = sum(row["valid_citation_count"] for row in completed)
-    uncited_answers = sum(1 for row in completed if row["citation_count"] == 0)
-    claim_total = sum(row["claim_count"] for row in completed)
-    supported_total = sum(row["supported_claim_count"] for row in completed)
+    answered = [row for row in completed if row.get("answer_grade") != "abstained"]
+    citation_total = sum(row["citation_count"] for row in answered)
+    valid_total = sum(row["valid_citation_count"] for row in answered)
+    uncited_answers = sum(1 for row in answered if row["citation_count"] == 0)
+    claim_total = sum(row["claim_count"] for row in answered)
+    supported_total = sum(row["supported_claim_count"] for row in answered)
     latencies = [row["latency_seconds"] for row in completed]
     matches = sum(1 for row in completed if row["confidence_matches_expected"])
-    graded = [row for row in completed if isinstance(row.get("answer_correct"), bool)]
-    correct = sum(1 for row in graded if row["answer_correct"])
+    correct = sum(1 for row in completed if row.get("answer_grade") == "correct")
+    abstained = sum(1 for row in completed if row.get("answer_grade") == "abstained")
+    wrong = sum(1 for row in completed if row.get("answer_grade") == "wrong")
 
     summary = {
         "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
@@ -147,9 +181,11 @@ def _write_results(rows: list[dict], questions: list[dict], max_results: int, *,
         "claim_support_rate": _rate(supported_total, claim_total),
         "average_latency_seconds": round(sum(latencies) / len(latencies), 2) if latencies else None,
         "confidence_label_match_rate": _rate(matches, len(completed)),
-        "answer_correctness_rate": _rate(correct, len(graded)),
-        "graded_count": len(graded),
+        "answer_correctness_rate": _rate(correct, len(completed)),
         "correct_count": correct,
+        "abstained_count": abstained,
+        "wrong_count": wrong,
+        "graded_count": correct + abstained + wrong,
         "citation_count": citation_total,
         "valid_citation_count": valid_total,
         "claim_count": claim_total,
@@ -186,7 +222,7 @@ def main() -> None:
         summary = _write_results(rows, questions, max_results, results_path=results_path)
         print(
             f"  label={row['confidence_label']} expected={row['expected_strength']} "
-            f"correct={row['answer_correct']} latency={row['latency_seconds']}s error={row['error']}",
+            f"grade={row['answer_grade']} latency={row['latency_seconds']}s error={row['error']}",
             flush=True,
         )
     print(json.dumps(summary, indent=2), flush=True)
@@ -201,7 +237,7 @@ def main() -> None:
         if len(sample) >= 8:
             break
     for row in sample:
-        print(f"\n[{row['id']}] correct={row.get('answer_correct')}", flush=True)
+        print(f"\n[{row['id']}] grade={row.get('answer_grade')}", flush=True)
         print(f"Reference: {row.get('reference_conclusion')}", flush=True)
         print(f"Reason: {row.get('answer_grade_reason')}", flush=True)
         print(f"Answer: {(row.get('answer') or '')[:700]}", flush=True)

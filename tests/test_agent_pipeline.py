@@ -3,7 +3,9 @@ import json
 from agent import (
     _apply_citation_confidence,
     _coerce_query_plan,
+    _invoke_llm,
     _prepare_reference_payload,
+    _rank_evidence,
     _safe_json_loads,
     _strip_invalid_citations,
     _verify_citations,
@@ -11,7 +13,7 @@ from agent import (
     quote_in_abstract,
     rank_articles,
 )
-from pubmed_tool import exclude_retracted
+from pubmed_tool import exclude_retracted, search_pubmed
 
 
 def test_rank_articles_prefers_stronger_study_design():
@@ -458,3 +460,145 @@ def test_confidence_capped_at_low_when_claim_support_is_zero():
     assert confidence["label"] == "Low"
     assert confidence["score"] <= 0.49
     assert "capped at Low" in confidence["rationale"]
+
+
+def test_quote_match_folds_british_and_american_spelling():
+    abstract = (
+        "Warfarin reduced major hemorrhage without causing anemia or oedema "
+        "in adults with atrial fibrillation."
+    )
+    quote = (
+        "Warfarin reduced major haemorrhage without causing anaemia or edema "
+        "in adults with atrial fibrillation."
+    )
+
+    assert quote_in_abstract(quote, abstract) is True
+
+
+def test_off_topic_articles_skip_synthesis():
+    plan = {
+        "population": "adults with coronary heart disease",
+        "intervention": "statins",
+        "comparison": "placebo",
+        "pubmed_query": "statins coronary heart disease",
+    }
+    state = {
+        "question": "Do statins reduce events compared with placebo?",
+        "mode": "standard",
+        "max_results": 4,
+        "query_plan": plan,
+        "articles": [
+            {
+                "pmid": "1",
+                "title": "Niacin for primary prevention of cardiovascular events",
+                "abstract": "This systematic review of niacin found no clear benefit.",
+                "year": "2020",
+                "publication_types": ["Meta-Analysis"],
+            }
+        ],
+        "comparison_articles": [],
+    }
+
+    result = _rank_evidence(state)
+
+    assert result["needs_expert_review"] is True
+    assert "needs expert review" in result["synthesis"]["answer"]
+    assert "statin" not in result["synthesis"]["answer"].lower()
+
+
+def test_on_topic_articles_continue_to_synthesis():
+    plan = {
+        "population": "adults with coronary heart disease",
+        "intervention": "statins",
+        "comparison": "placebo",
+    }
+    state = {
+        "question": "Do statins reduce events compared with placebo?",
+        "mode": "standard",
+        "max_results": 4,
+        "query_plan": plan,
+        "articles": [
+            {
+                "pmid": "2",
+                "title": "Simvastatin in coronary heart disease",
+                "abstract": "Adults with coronary heart disease were assigned to a statin or placebo.",
+                "year": "1994",
+                "publication_types": ["Randomized Controlled Trial"],
+            }
+        ],
+        "comparison_articles": [],
+    }
+
+    result = _rank_evidence(state)
+
+    assert result["needs_expert_review"] is False
+    assert "synthesis" not in result
+
+
+def test_rct_ids_are_kept_when_reviews_fill_the_pool(monkeypatch):
+    def fake_esearch(term, retmax):
+        if "Randomized Controlled Trial" in term:
+            return ["9001"]
+        if "Systematic Review" in term or "Meta-Analysis" in term:
+            return [str(1000 + index) for index in range(retmax)]
+        return []
+
+    def lookup(pmids):
+        return {
+            pmid: {
+                "pmid": pmid,
+                "title": "Trial" if pmid == "9001" else "Review",
+                "abstract": "An abstract long enough to keep.",
+                "publication_types": ["Randomized Controlled Trial"] if pmid == "9001" else ["Meta-Analysis"],
+            }
+            for pmid in pmids
+        }
+
+    monkeypatch.setattr("pubmed_tool._esearch_pmids", fake_esearch)
+    monkeypatch.setattr("pubmed_tool._lookup_cached_pubmed_articles", lookup)
+    monkeypatch.setattr("pubmed_tool._read_retrieval_cache", lambda: {})
+    monkeypatch.setattr("pubmed_tool._write_retrieval_cache", lambda _cache: None)
+
+    articles = search_pubmed("metformin placebo diabetes", max_results=5)
+
+    assert "9001" in [article["pmid"] for article in articles]
+
+
+class _SequencedLLM:
+    def __init__(self, responses, max_tokens=None):
+        self.responses = responses
+        self.max_tokens = max_tokens
+
+    def invoke(self, _messages):
+        return self.responses.pop(0)
+
+
+def test_empty_cut_off_reply_retries_with_higher_max_tokens(monkeypatch):
+    built: list[int | None] = []
+
+    class _EmptyReply:
+        content = ""
+        response_metadata = {
+            "finish_reason": "length",
+            "token_usage": {
+                "completion_tokens": 128,
+                "completion_tokens_details": {"reasoning_tokens": 128},
+            },
+        }
+
+    class _FullReply:
+        content = '{"claims": []}'
+        response_metadata = {"finish_reason": "stop", "token_usage": {"completion_tokens": 20}}
+
+    def build(max_tokens=None):
+        built.append(max_tokens)
+        if max_tokens is None:
+            return _SequencedLLM([_EmptyReply()])
+        return _SequencedLLM([_FullReply()], max_tokens=max_tokens)
+
+    monkeypatch.setattr("agent._build_llm", build)
+
+    response = _invoke_llm([])
+
+    assert built == [None, 4096]
+    assert response.content == '{"claims": []}'
