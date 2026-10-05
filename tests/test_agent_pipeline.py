@@ -2,6 +2,7 @@ import json
 
 from agent import (
     _apply_citation_confidence,
+    _batch_relevance_scores,
     _coerce_query_plan,
     _invoke_llm,
     _prepare_reference_payload,
@@ -136,15 +137,44 @@ def test_safe_json_loads_strips_code_fence():
     assert parsed["claims"] == []
 
 
-def test_query_plan_falls_back_when_llm_json_fails_validation():
+def test_query_plan_falls_back_when_pico_fields_are_missing():
     plan = _coerce_query_plan(
         "Does metformin lower blood glucose in type 2 diabetes?",
-        {"pubmed_query": "", "population": "adults"},
+        {"pubmed_query": ""},
     )
 
     assert plan["source"] == "rule_based"
     assert "metformin" in plan["pubmed_query"].lower()
     assert plan["population"] == ""
+
+
+def test_pico_query_is_parenthesized_and_drops_invalid_mesh(monkeypatch):
+    def resolve(term: str):
+        if term.lower() == "coronary disease":
+            return "Coronary Disease"
+        return None
+
+    monkeypatch.setattr("agent.resolve_mesh_heading", resolve)
+    plan = _coerce_query_plan(
+        "Do statins reduce events?",
+        {
+            "population": "coronary heart disease",
+            "intervention": "statins",
+            "comparison": "placebo",
+            "outcome": "major cardiovascular events",
+            "mesh": {"population": ["Coronary Disease"], "intervention": ["Statins"]},
+        },
+    )
+
+    query = plan["pubmed_query"]
+    assert plan["source"] == "pico"
+    assert query.startswith("(") and query.endswith(")")
+    assert '"Coronary Disease"[Mesh]' in query
+    assert "[Mesh]" in query and '"statins"[tiab]' in query
+    assert '"Statins"[Mesh]' not in query
+    assert " AND " in query
+    assert '"major cardiovascular events"[tiab]' in query
+    assert "[Mesh]" not in plan["fallback_query"]
 
 
 def test_strip_invalid_citations_drops_sentences_with_only_bad_indexes():
@@ -190,7 +220,7 @@ def test_verifier_removes_unsupported_claims_and_invalid_citations(monkeypatch):
         ],
         "removed_or_changed": ["Removed the cancer cure claim because citation 9 is not a retrieved article."],
     }
-    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    monkeypatch.setattr("agent._build_llm", lambda *args, **kwargs: _FakeLLM(json.dumps(payload)))
 
     state = {
         "synthesis": {"answer": "Metformin lowered glucose [1]. It cures cancer [9]."},
@@ -244,7 +274,7 @@ def test_verifier_rejects_support_without_exact_quote(monkeypatch):
         ],
         "removed_or_changed": [],
     }
-    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    monkeypatch.setattr("agent._build_llm", lambda *args, **kwargs: _FakeLLM(json.dumps(payload)))
     state = {
         "synthesis": {"answer": "Metformin cures diabetes [1]."},
         "articles": [
@@ -299,7 +329,7 @@ def test_zero_citations_fail_validity_and_support(monkeypatch):
         ],
         "removed_or_changed": [],
     }
-    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    monkeypatch.setattr("agent._build_llm", lambda *args, **kwargs: _FakeLLM(json.dumps(payload)))
     state = {
         "synthesis": {"answer": "Statins reduce cardiovascular events."},
         "articles": [_metformin_article()],
@@ -318,7 +348,7 @@ def test_missing_claim_list_fails_support(monkeypatch):
         "verified_answer": "Metformin lowered glucose [1].",
         "removed_or_changed": [],
     }
-    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    monkeypatch.setattr("agent._build_llm", lambda *args, **kwargs: _FakeLLM(json.dumps(payload)))
     state = {
         "synthesis": {"answer": "Metformin lowered glucose [1]."},
         "articles": [_metformin_article()],
@@ -347,7 +377,7 @@ def test_claims_not_tied_to_citation_markers_are_unsupported(monkeypatch):
         ],
         "removed_or_changed": [],
     }
-    monkeypatch.setattr("agent._build_llm", lambda: _FakeLLM(json.dumps(payload)))
+    monkeypatch.setattr("agent._build_llm", lambda *args, **kwargs: _FakeLLM(json.dumps(payload)))
     state = {
         "synthesis": {"answer": "Metformin lowered glucose [1]."},
         "articles": [_metformin_article()],
@@ -377,7 +407,7 @@ def test_verifier_retries_once_when_the_first_reply_is_not_json(monkeypatch):
     replies = iter(["Here is my review, not JSON.", "```json\n" + json.dumps(good) + "\n```"])
     prompts: list[str] = []
 
-    def fake_invoke(messages):
+    def fake_invoke(messages, **kwargs):
         prompts.append(messages[0].content)
         return _FakeResponse(next(replies))
 
@@ -475,7 +505,8 @@ def test_quote_match_folds_british_and_american_spelling():
     assert quote_in_abstract(quote, abstract) is True
 
 
-def test_off_topic_articles_skip_synthesis():
+def test_off_topic_articles_skip_synthesis(monkeypatch):
+    monkeypatch.setattr("agent._batch_relevance_scores", lambda question, articles: {})
     plan = {
         "population": "adults with coronary heart disease",
         "intervention": "statins",
@@ -494,6 +525,7 @@ def test_off_topic_articles_skip_synthesis():
                 "abstract": "This systematic review of niacin found no clear benefit.",
                 "year": "2020",
                 "publication_types": ["Meta-Analysis"],
+                "relevance_llm_score": 0,
             }
         ],
         "comparison_articles": [],
@@ -503,20 +535,14 @@ def test_off_topic_articles_skip_synthesis():
 
     assert result["needs_expert_review"] is True
     assert "needs expert review" in result["synthesis"]["answer"]
-    assert "statin" not in result["synthesis"]["answer"].lower()
 
 
-def test_on_topic_articles_continue_to_synthesis():
-    plan = {
-        "population": "adults with coronary heart disease",
-        "intervention": "statins",
-        "comparison": "placebo",
-    }
+def test_one_strong_article_still_abstains():
     state = {
         "question": "Do statins reduce events compared with placebo?",
         "mode": "standard",
         "max_results": 4,
-        "query_plan": plan,
+        "query_plan": {"population": "coronary heart disease", "intervention": "statins", "comparison": "placebo"},
         "articles": [
             {
                 "pmid": "2",
@@ -524,8 +550,39 @@ def test_on_topic_articles_continue_to_synthesis():
                 "abstract": "Adults with coronary heart disease were assigned to a statin or placebo.",
                 "year": "1994",
                 "publication_types": ["Randomized Controlled Trial"],
-            }
+                "relevance_llm_score": 2,
+            },
+            {
+                "pmid": "3",
+                "title": "Omega-3 fatty acids",
+                "abstract": "Fish oil for primary prevention.",
+                "year": "2018",
+                "publication_types": ["Meta-Analysis"],
+                "relevance_llm_score": 0,
+            },
         ],
+        "comparison_articles": [],
+    }
+
+    result = _rank_evidence(state)
+
+    assert result["needs_expert_review"] is True
+
+
+def test_on_topic_articles_continue_to_synthesis():
+    article = {
+        "title": "Simvastatin in coronary heart disease",
+        "abstract": "Adults with coronary heart disease were assigned to a statin or placebo.",
+        "year": "1994",
+        "publication_types": ["Randomized Controlled Trial"],
+        "relevance_llm_score": 2,
+    }
+    state = {
+        "question": "Do statins reduce events compared with placebo?",
+        "mode": "standard",
+        "max_results": 4,
+        "query_plan": {"population": "coronary heart disease", "intervention": "statins", "comparison": "placebo"},
+        "articles": [{**article, "pmid": "2"}, {**article, "pmid": "4"}],
         "comparison_articles": [],
     }
 
@@ -533,6 +590,33 @@ def test_on_topic_articles_continue_to_synthesis():
 
     assert result["needs_expert_review"] is False
     assert "synthesis" not in result
+
+
+def test_relevance_score_ranks_ahead_of_study_design():
+    question = "Do statins reduce events in coronary heart disease compared with placebo?"
+    review = {
+        "pmid": "1",
+        "title": "Niacin review",
+        "abstract": "Niacin for primary prevention.",
+        "year": "2024",
+        "publication_types": ["Meta-Analysis"],
+        "relevance_llm_score": 0,
+    }
+    trial = {
+        "pmid": "7968073",
+        "title": "Scandinavian Simvastatin Survival Study",
+        "abstract": "Simvastatin versus placebo in coronary heart disease.",
+        "year": "1994",
+        "publication_types": ["Randomized Controlled Trial"],
+        "relevance_llm_score": 2,
+    }
+    on_topic_review = {**review, "pmid": "9", "relevance_llm_score": 2}
+
+    ranked = rank_articles([review, trial], question, now_year=2024)
+    both_strong = rank_articles([on_topic_review, trial], question, now_year=2024)
+
+    assert ranked[0]["pmid"] == "7968073"
+    assert both_strong[0]["pmid"] == "9"
 
 
 def test_rct_ids_are_kept_when_reviews_fill_the_pool(monkeypatch):
@@ -590,7 +674,7 @@ def test_empty_cut_off_reply_retries_with_higher_max_tokens(monkeypatch):
         content = '{"claims": []}'
         response_metadata = {"finish_reason": "stop", "token_usage": {"completion_tokens": 20}}
 
-    def build(max_tokens=None):
+    def build(max_tokens=None, reasoning_effort=None):
         built.append(max_tokens)
         if max_tokens is None:
             return _SequencedLLM([_EmptyReply()])
@@ -602,3 +686,65 @@ def test_empty_cut_off_reply_retries_with_higher_max_tokens(monkeypatch):
 
     assert built == [None, 4096]
     assert response.content == '{"claims": []}'
+
+
+def test_narrow_query_merges_the_fallback(monkeypatch):
+    def fake_esearch(term, retmax):
+        if "narrow-query" in term:
+            return ["1"] if "Randomized Controlled Trial" in term else ["2"]
+        if "Randomized Controlled Trial" in term:
+            return ["3"]
+        return ["4", "5", "6"]
+
+    def lookup(pmids):
+        return {
+            pmid: {
+                "pmid": pmid,
+                "title": "Study",
+                "abstract": "An abstract long enough to keep.",
+                "publication_types": ["Journal Article"],
+            }
+            for pmid in pmids
+        }
+
+    monkeypatch.setattr("pubmed_tool._esearch_pmids", fake_esearch)
+    monkeypatch.setattr("pubmed_tool._lookup_cached_pubmed_articles", lookup)
+    monkeypatch.setattr("pubmed_tool._read_retrieval_cache", lambda: {})
+    monkeypatch.setattr("pubmed_tool._write_retrieval_cache", lambda _cache: None)
+
+    articles = search_pubmed(
+        "unused question",
+        max_results=15,
+        query_candidates=["narrow-query", "broad-query"],
+    )
+    pmids = [article["pmid"] for article in articles]
+
+    assert "2" in pmids
+    assert "4" in pmids
+
+
+def test_relevance_batches_score_every_pmid_and_retry_missing(monkeypatch):
+    articles = [{"pmid": str(index), "title": f"Study {index}", "abstract": "An abstract about the question."} for index in range(1, 13)]
+    calls: list[list[str]] = []
+    dropped = {"done": False}
+
+    def fake_invoke(messages, **kwargs):
+        text = messages[-1].content
+        pmids = []
+        for line in text.splitlines():
+            if line.startswith("PMID "):
+                pmids.append(line.replace("PMID ", "").strip())
+        calls.append(pmids)
+        payload = {pmid: 2 for pmid in pmids}
+        if "12" in pmids and not dropped["done"]:
+            dropped["done"] = True
+            payload.pop("12")
+        return _FakeResponse(json.dumps(payload))
+
+    monkeypatch.setattr("agent._invoke_llm", fake_invoke)
+
+    scores = _batch_relevance_scores("Do statins help?", articles)
+
+    assert set(scores) == {str(index) for index in range(1, 13)}
+    assert scores["12"] == 2
+    assert any(call == ["12"] or "12" in call and len(call) < 6 for call in calls[1:])

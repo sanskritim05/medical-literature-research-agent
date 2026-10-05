@@ -21,6 +21,7 @@ from pubmed_tool import (
     extract_highlight_sentences,
     search_cached_literature,
     search_clinical_trials,
+    resolve_mesh_heading,
     search_pubmed,
 )
 
@@ -48,6 +49,8 @@ class ResearchState(TypedDict, total=False):
     article_summaries: list[dict[str, str]]
     synthesis: dict[str, Any]
     needs_expert_review: bool
+    relevance_scored: int
+    relevance_total: int
 
 
 MAX_ARTICLE_SUMMARIES = int(os.getenv("MAX_ARTICLE_SUMMARIES", "4"))
@@ -60,7 +63,11 @@ _SUMMARY_CACHE_PATH = (
 )
 
 
-def _build_llm(max_tokens: int | None = None):
+def _model_supports_low_reasoning() -> bool:
+    return "gpt-oss" in os.getenv("GROQ_MODEL", "")
+
+
+def _build_llm(max_tokens: int | None = None, reasoning_effort: str | None = None):
     provider = os.getenv("LLM_PROVIDER", "groq").strip().lower()
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 
@@ -82,6 +89,8 @@ def _build_llm(max_tokens: int | None = None):
     kwargs: dict[str, Any] = {"groq_api_key": api_key, "model_name": model, "temperature": temperature}
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    if reasoning_effort:
+        kwargs["model_kwargs"] = {"reasoning_effort": reasoning_effort}
     return ChatGroq(**kwargs)
 
 
@@ -126,8 +135,8 @@ def _reply_was_cut_off(response: Any) -> bool:
     return finish == "length" or (completion > 0 and reasoning >= completion)
 
 
-def _invoke_llm(messages: list[Any]) -> Any:
-    llm = _build_llm()
+def _invoke_llm(messages: list[Any], *, reasoning_effort: str | None = None) -> Any:
+    llm = _build_llm(reasoning_effort=reasoning_effort)
     last_error: Exception | None = None
     for attempt in range(5):
         try:
@@ -142,15 +151,21 @@ def _invoke_llm(messages: list[Any]) -> Any:
                 if _reply_was_cut_off(response):
                     higher = 4096
                     logger.warning("Empty reply was cut off; retrying with max_tokens=%s", higher)
-                    return _build_llm(max_tokens=higher).invoke(messages)
+                    return _build_llm(max_tokens=higher, reasoning_effort=reasoning_effort).invoke(messages)
             return response
         except Exception as exc:
             last_error = exc
             message = str(exc).lower()
-            retryable = any(token in message for token in ("429", "rate limit", "503", "over capacity"))
+            retryable = any(
+                token in message
+                for token in ("429", "rate limit", "rate_limit", "503", "over capacity", "tokens per minute")
+            )
             if not retryable or attempt == 4:
                 raise
-            time.sleep(_retry_delay_seconds(exc, attempt))
+            if "tokens per minute" in message or "413" in message:
+                time.sleep(min(65, 25 + 15 * attempt))
+            else:
+                time.sleep(_retry_delay_seconds(exc, attempt))
     raise last_error or RuntimeError("LLM call failed.")
 
 
@@ -225,28 +240,144 @@ def _valid_pubmed_query(value: Any) -> bool:
     return bool(re.search(r"[A-Za-z]", text))
 
 
+def _clean_query_term(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").replace('"', "")).strip()
+
+
+def _mesh_candidates(parsed: dict[str, Any], field: str, phrase: str) -> list[str]:
+    mesh = parsed.get("mesh")
+    values: list[Any] = []
+    if isinstance(mesh, dict):
+        raw = mesh.get(field) or []
+        values = raw if isinstance(raw, list) else [raw]
+    candidates = [_clean_query_term(item) for item in values]
+    if phrase:
+        candidates.append(phrase)
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate.lower() not in {item.lower() for item in unique}:
+            unique.append(candidate)
+    return unique
+
+
+_GENERIC_MESH_HEADINGS = {
+    "adolescent",
+    "adult",
+    "aged",
+    "aged, 80 and over",
+    "child",
+    "female",
+    "humans",
+    "infant",
+    "male",
+    "middle aged",
+    "young adult",
+}
+
+
+def _field_group(phrase: str, candidates: list[str], *, use_mesh: bool) -> str:
+    parts: list[str] = []
+    if use_mesh:
+        for candidate in candidates:
+            heading = resolve_mesh_heading(candidate)
+            if not heading or heading.lower() in _GENERIC_MESH_HEADINGS:
+                continue
+            for tag in ("Mesh", "Pharmacological Action"):
+                part = f'"{heading}"[{tag}]'
+                if part not in parts:
+                    parts.append(part)
+    if phrase:
+        parts.append(f'"{phrase}"[tiab]')
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", phrase.lower())
+            if len(token) > 3 and token not in _RELEVANCE_STOPWORDS
+        ]
+        if len(tokens) >= 2:
+            parts.append("(" + " AND ".join(f"{token}[tiab]" for token in tokens) + ")")
+        if len(tokens) >= 3:
+            parts.append(f"({tokens[0]}[tiab] AND {tokens[-1]}[tiab])")
+        for size in (2, 3):
+            if len(tokens) < size:
+                continue
+            for start in range(len(tokens) - size + 1):
+                window = " ".join(tokens[start : start + size])
+                part = f'"{window}"[tiab]'
+                if part not in parts and part != f'"{phrase}"[tiab]':
+                    parts.append(part)
+    if not parts:
+        return ""
+    return "(" + " OR ".join(parts) + ")"
+
+
+def build_pico_boolean_query(
+    population: str,
+    intervention: str,
+    comparison: str,
+    outcome: str,
+    mesh: dict[str, list[str]],
+    *,
+    use_mesh: bool,
+) -> str:
+    """Build a parenthesized PubMed query from PICO fields. The model does not write the Boolean syntax."""
+    groups: list[str] = []
+    for field, phrase in (
+        ("population", population),
+        ("intervention", intervention),
+        ("comparison", comparison),
+        ("outcome", outcome),
+    ):
+        group = _field_group(phrase, mesh.get(field) or [], use_mesh=use_mesh)
+        if group:
+            groups.append(group)
+    if not groups:
+        return ""
+    return "(" + " AND ".join(groups) + ")"
+
+
 def _coerce_query_plan(question: str, parsed: dict[str, Any] | None) -> dict[str, Any]:
-    """Keep an LLM plan only when its PubMed query validates. Otherwise use the rule-based query."""
-    fallback = _normalize_pubmed_query(question) or question.strip()
-    if not parsed or not _valid_pubmed_query(parsed.get("pubmed_query")):
-        return {
-            "population": "",
-            "intervention": "",
-            "comparison": "",
-            "outcome": "",
-            "pubmed_query": fallback,
-            "fallback_query": question.strip(),
-            "source": "rule_based",
-        }
-    fallback_query = parsed.get("fallback_query")
+    """Build the PubMed query from PICO fields. A missing plan falls back to keywords."""
+    keyword_query = _normalize_pubmed_query(question) or question.strip()
+    rule_based = {
+        "population": "",
+        "intervention": "",
+        "comparison": "",
+        "outcome": "",
+        "pubmed_query": keyword_query,
+        "fallback_query": question.strip(),
+        "source": "rule_based",
+    }
+    if not parsed:
+        return rule_based
+    population = _clean_query_term(parsed.get("population"))
+    intervention = _clean_query_term(parsed.get("intervention"))
+    comparison = _clean_query_term(parsed.get("comparison"))
+    outcome = _clean_query_term(parsed.get("outcome"))
+    if not any((population, intervention, comparison, outcome)):
+        return rule_based
+    mesh = {
+        field: _mesh_candidates(parsed, field, phrase)
+        for field, phrase in (
+            ("population", population),
+            ("intervention", intervention),
+            ("comparison", comparison),
+            ("outcome", outcome),
+        )
+    }
+    pubmed_query = build_pico_boolean_query(
+        population, intervention, comparison, outcome, mesh, use_mesh=True
+    )
+    fallback_query = build_pico_boolean_query(
+        population, intervention, comparison, outcome, mesh, use_mesh=False
+    )
     return {
-        "population": str(parsed.get("population") or "").strip(),
-        "intervention": str(parsed.get("intervention") or "").strip(),
-        "comparison": str(parsed.get("comparison") or "").strip(),
-        "outcome": str(parsed.get("outcome") or "").strip(),
-        "pubmed_query": str(parsed["pubmed_query"]).strip(),
-        "fallback_query": str(fallback_query).strip() if _valid_pubmed_query(fallback_query) else fallback,
-        "source": "llm",
+        "population": population,
+        "intervention": intervention,
+        "comparison": comparison,
+        "outcome": outcome,
+        "pubmed_query": pubmed_query or keyword_query,
+        "fallback_query": fallback_query or keyword_query,
+        "source": "pico",
     }
 
 
@@ -359,8 +490,21 @@ def rank_articles(
         updated = dict(article)
         updated["rank_score"] = score
         updated["rank_reason"] = reason
+        if isinstance(article.get("relevance_llm_score"), int):
+            updated["relevance_llm_score"] = int(article["relevance_llm_score"])
+            updated["rank_reason"] = f"llm_relevance={updated['relevance_llm_score']}, {reason}"
         ranked.append(updated)
-    ranked.sort(key=lambda item: item["rank_score"], reverse=True)
+    if any(isinstance(item.get("relevance_llm_score"), int) for item in ranked):
+        ranked.sort(
+            key=lambda item: (
+                int(item["relevance_llm_score"]) if isinstance(item.get("relevance_llm_score"), int) else -1,
+                study_design_score(item)[0],
+                item["rank_score"],
+            ),
+            reverse=True,
+        )
+    else:
+        ranked.sort(key=lambda item: item["rank_score"], reverse=True)
     return ranked
 
 
@@ -527,15 +671,19 @@ def _plan_one(question: str) -> dict[str, Any]:
         return _coerce_query_plan(question, None)
     try:
         system_prompt = """
-You turn a clinical question into a PubMed search plan.
-Return valid JSON only:
+You turn a clinical question into PICO concepts for a PubMed search.
+Return valid JSON only. Do not write Boolean operators, parentheses, or field tags.
 {
   "population": "who the question is about",
   "intervention": "the treatment, exposure, or test",
   "comparison": "the comparator, or empty if none",
   "outcome": "the outcome of interest",
-  "pubmed_query": "a PubMed query using MeSH-style terms and Boolean AND/OR, no field tags required",
-  "fallback_query": "a shorter keyword query if the MeSH-style query is too narrow"
+  "mesh": {
+    "population": ["possible official MeSH heading"],
+    "intervention": ["possible official MeSH heading"],
+    "comparison": ["possible official MeSH heading"],
+    "outcome": ["possible official MeSH heading"]
+  }
 }
 Use only concepts present in the question. Do not add unrelated drugs or diseases.
 """.strip()
@@ -837,14 +985,128 @@ def _retrieve_literature(state: ResearchState) -> ResearchState:
         return result
 
 
-def _top_articles_match_pico(articles: list[dict[str, Any]], plan: dict[str, Any] | None) -> bool:
-    """True when at least one kept article matches the planned PICO, or no PICO was planned."""
+def _parse_relevance_payload(parsed: dict[str, Any] | None, known: set[str]) -> dict[str, int]:
+    """Read a PMID-keyed score object. A list of {pmid, score} objects is accepted too."""
+    if not isinstance(parsed, dict):
+        return {}
+    raw = parsed.get("scores", parsed)
+    pairs: list[tuple[Any, Any]] = []
+    if isinstance(raw, dict):
+        pairs = [(key, value) for key, value in raw.items() if key != "scores"]
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                pairs.append((item.get("pmid"), item.get("score")))
+    scores: dict[str, int] = {}
+    for pmid, score in pairs:
+        key = str(pmid or "").strip()
+        if key not in known:
+            continue
+        try:
+            value = int(score)
+        except (TypeError, ValueError):
+            continue
+        scores[key] = min(2, max(0, value))
+    return scores
+
+
+def _score_relevance_batch(question: str, articles: list[dict[str, Any]]) -> dict[str, int]:
+    """Ask for one JSON object keyed by PMID and keep only scores for this batch."""
     if not articles:
-        return True
-    alignments = [pico_alignment(article, plan)[0] for article in articles]
-    if all(value is None for value in alignments):
-        return True
-    return any(value is True for value in alignments)
+        return {}
+    known = {str(article.get("pmid") or "").strip() for article in articles if str(article.get("pmid") or "").strip()}
+    blocks: list[str] = []
+    for article in articles:
+        abstract = re.sub(r"\s+", " ", str(article.get("abstract") or ""))
+        if len(abstract) > 700:
+            abstract = f"{abstract[:400]} ... {abstract[-250:]}"
+        blocks.append(f"PMID {article.get('pmid')}\nTitle: {article.get('title', '')}\nAbstract: {abstract}")
+    system_prompt = """
+Score how well each article matches the clinical question.
+Use the question's population, intervention, comparator, and outcome.
+2 = the article studies that population, intervention, comparator, and outcome.
+1 = it matches only some of those elements.
+0 = it answers a different question.
+Return one JSON object and nothing else. Keys are the PMIDs. Values are 0, 1, or 2.
+Include every PMID from this batch.
+Example: {"7968073": 2, "12114036": 0}
+""".strip()
+    user_prompt = f"Question: {question}\n\nArticles:\n\n" + "\n\n".join(blocks)
+    response = _invoke_llm(
+        [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+        reasoning_effort="low" if _model_supports_low_reasoning() else None,
+    )
+    text = _response_text(response)
+    parsed = _safe_json_loads(text)
+    if not isinstance(parsed, dict):
+        parsed = _safe_json_loads(text.rstrip() + "}")
+    return _parse_relevance_payload(parsed if isinstance(parsed, dict) else None, known)
+
+
+def _batch_relevance_scores(question: str, articles: list[dict[str, Any]]) -> dict[str, int]:
+    """Score candidates in parallel batches of 6, then retry any PMID that came back without a score."""
+    pending = [article for article in articles if str(article.get("pmid") or "").strip()]
+    if not pending:
+        return {}
+    batch_size = 6
+    batches = [pending[start : start + batch_size] for start in range(0, len(pending), batch_size)]
+
+    def _run(batch: list[dict[str, Any]]) -> dict[str, int]:
+        try:
+            return _score_relevance_batch(question, batch)
+        except Exception as exc:
+            logger.warning("Relevance batch failed: %s", exc)
+            return {}
+
+    scores: dict[str, int] = {}
+    workers = min(4, len(batches))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for batch_scores in executor.map(_run, batches):
+            scores.update(batch_scores)
+
+    missing = [article for article in pending if str(article.get("pmid")) not in scores]
+    if missing:
+        retry_batches = [missing[start : start + batch_size] for start in range(0, len(missing), batch_size)]
+        with ThreadPoolExecutor(max_workers=min(4, len(retry_batches))) as executor:
+            for batch_scores in executor.map(_run, retry_batches):
+                scores.update(batch_scores)
+        still_missing = [str(article.get("pmid")) for article in missing if str(article.get("pmid")) not in scores]
+        if still_missing:
+            logger.warning(
+                "Relevance score missing after retry for %s of %s PMIDs: %s",
+                len(still_missing),
+                len(pending),
+                ", ".join(still_missing),
+            )
+    return scores
+
+
+def _attach_relevance_scores(question: str, articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not articles or all(isinstance(article.get("relevance_llm_score"), int) for article in articles):
+        return articles
+    try:
+        scores = _batch_relevance_scores(question, articles)
+    except Exception as exc:
+        logger.warning("Relevance scoring failed: %s", exc)
+        scores = {}
+    scored: list[dict[str, Any]] = []
+    for article in articles:
+        updated = dict(article)
+        pmid = str(updated.get("pmid") or "").strip()
+        if pmid in scores:
+            updated["relevance_llm_score"] = scores[pmid]
+        scored.append(updated)
+    covered = sum(1 for article in scored if isinstance(article.get("relevance_llm_score"), int))
+    print(f"relevance scored {covered}/{len(articles)}", flush=True)
+    return scored
+
+
+def _top_articles_match_pico(articles: list[dict[str, Any]], plan: dict[str, Any] | None = None) -> bool:
+    """Require two of the top four articles to score 2. Otherwise the pipeline abstains."""
+    del plan
+    top = list(articles or [])[:4]
+    strong = sum(1 for article in top if article.get("relevance_llm_score") == 2)
+    return strong >= 2
 
 
 def _abstain_synthesis() -> dict[str, Any]:
@@ -870,14 +1132,17 @@ def _abstain_synthesis() -> dict[str, Any]:
 def _rank_evidence(state: ResearchState) -> ResearchState:
     keep = min(int(state.get("max_results") or MAX_ARTICLE_SUMMARIES), MAX_ARTICLE_SUMMARIES)
     keep = max(1, keep)
+    primary_scored = _attach_relevance_scores(state["question"], state.get("articles") or [])
+    comparison_question = state.get("comparison_question") or state["question"]
+    comparison_scored = _attach_relevance_scores(comparison_question, state.get("comparison_articles") or [])
     primary = rank_articles(
-        state.get("articles") or [],
+        primary_scored,
         state["question"],
         plan=state.get("query_plan"),
     )[:keep]
     comparison = rank_articles(
-        state.get("comparison_articles") or [],
-        state.get("comparison_question") or state["question"],
+        comparison_scored,
+        comparison_question,
         plan=state.get("comparison_query_plan") or state.get("query_plan"),
     )
     if state.get("mode") == "compare":
@@ -885,12 +1150,22 @@ def _rank_evidence(state: ResearchState) -> ResearchState:
     else:
         comparison = []
     primary, comparison = assign_citation_indexes(primary, comparison)
+    relevance_scored = sum(1 for article in primary_scored if isinstance(article.get("relevance_llm_score"), int))
+    relevance_total = len(primary_scored)
     if _top_articles_match_pico(primary, state.get("query_plan")):
-        return {"articles": primary, "comparison_articles": comparison, "needs_expert_review": False}
+        return {
+            "articles": primary,
+            "comparison_articles": comparison,
+            "needs_expert_review": False,
+            "relevance_scored": relevance_scored,
+            "relevance_total": relevance_total,
+        }
     return {
         "articles": primary,
         "comparison_articles": comparison,
         "needs_expert_review": True,
+        "relevance_scored": relevance_scored,
+        "relevance_total": relevance_total,
         "synthesis": _abstain_synthesis(),
     }
 
@@ -943,8 +1218,11 @@ Rely only on the provided structured study summaries. Do not use outside knowled
 Do not invent results, effect sizes, or recommendations.
 Cite a summary only with its printed number, such as [1].
 Every sentence that states a result must include a citation.
+State the conclusion supported by most of the higher-quality evidence.
+Weigh study design and study size: a systematic review or large randomized trial outweighs a smaller or weaker study.
+After that conclusion, note conflicting results as a caveat.
+Do not conclude that the evidence conflicts unless the strongest studies disagree with each other.
 Count how many summarized studies support the conclusion, how many oppose it, and how many are unclear.
-If effect directions disagree, say that the evidence conflicts and name both directions.
 
 Return valid JSON with this shape:
 {
@@ -1026,7 +1304,10 @@ def _invoke_verifier(system_prompt: str, user_prompt: str) -> dict[str, Any]:
     """Ask the fact-checker for JSON, then retry once if the reply has no claim list."""
 
     def _read(prompt: str) -> dict[str, Any] | None:
-        response = _invoke_llm([SystemMessage(content=prompt), HumanMessage(content=user_prompt)])
+        response = _invoke_llm(
+            [SystemMessage(content=prompt), HumanMessage(content=user_prompt)],
+            reasoning_effort="low" if _model_supports_low_reasoning() else None,
+        )
         parsed = _safe_json_loads(getattr(response, "content", ""))
         if isinstance(parsed, dict) and isinstance(parsed.get("claims"), list):
             return parsed
@@ -1367,6 +1648,8 @@ def run_research(
         "query_plan": result.get("query_plan") or {},
         "comparison_query_plan": result.get("comparison_query_plan") or {},
         "needs_expert_review": bool(result.get("needs_expert_review")),
+        "relevance_scored": int(result.get("relevance_scored") or 0),
+        "relevance_total": int(result.get("relevance_total") or 0),
         "rankings": ranking_rows(articles, "primary") + ranking_rows(comparison_articles, "comparison"),
         "citation_audit": citation_audit,
     }

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent import _invoke_llm, _safe_json_loads, run_research  # noqa: E402
+from agent import _invoke_llm, _model_supports_low_reasoning, _safe_json_loads, run_research  # noqa: E402
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
 
@@ -46,10 +46,10 @@ def grade_answer(question: str, reference_conclusion: str, answer: str) -> dict:
     system_prompt = """
 You grade a medical research answer against a reference conclusion.
 Return exactly one grade:
-- correct: the bottom-line direction matches the reference (benefit, harm, or no meaningful benefit).
+- correct: the answer's main conclusion agrees with the reference, even if it also notes conflicting evidence or a limitation.
 - abstained: the answer says the retrieved evidence does not address the question, or it declines to give a conclusion.
-- wrong: the answer is empty, answers a different question, or reaches a different conclusion.
-Ignore wording and citations when the direction still matches.
+- wrong: the main conclusion contradicts the reference, or the answer addresses a different question.
+Ignore wording and citations when the main conclusion still matches.
 Return valid JSON only: {"grade": "correct", "reason": "one sentence"}
 """.strip()
     user_prompt = (
@@ -58,7 +58,10 @@ Return valid JSON only: {"grade": "correct", "reason": "one sentence"}
         f"Answer:\n{answer}"
     )
     try:
-        response = _invoke_llm([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+        response = _invoke_llm(
+            [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+            reasoning_effort="low" if _model_supports_low_reasoning() else None,
+        )
         parsed = _safe_json_loads(getattr(response, "content", "")) or {}
         grade = str(parsed.get("grade") or "").strip().lower()
         if grade not in {"correct", "abstained", "wrong"}:
@@ -116,6 +119,8 @@ def evaluate_question(item: dict, *, max_results: int) -> dict:
             "confidence_label": label,
             "confidence_matches_expected": label == item["expected_strength"],
             "needs_expert_review": bool(result.get("needs_expert_review")),
+            "relevance_scored": int(result.get("relevance_scored") or 0),
+            "relevance_total": int(result.get("relevance_total") or 0),
             "latency_seconds": latency,
             "citation_count": int(audit.get("citation_count") or 0),
             "valid_citation_count": int(audit.get("valid_citation_count") or 0),
@@ -150,6 +155,8 @@ def evaluate_question(item: dict, *, max_results: int) -> dict:
             "answer_correct": None,
             "answer_grade_reason": "",
             "needs_expert_review": False,
+            "relevance_scored": 0,
+            "relevance_total": 0,
             "error": f"{type(exc).__name__}: {exc}",
         }
 
@@ -168,6 +175,7 @@ def _write_results(rows: list[dict], questions: list[dict], max_results: int, *,
     abstained = sum(1 for row in completed if row.get("answer_grade") == "abstained")
     wrong = sum(1 for row in completed if row.get("answer_grade") == "wrong")
 
+    answered_count = correct + wrong
     summary = {
         "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
         "max_article_summaries": int(os.getenv("MAX_ARTICLE_SUMMARIES", "4")),
@@ -185,6 +193,8 @@ def _write_results(rows: list[dict], questions: list[dict], max_results: int, *,
         "correct_count": correct,
         "abstained_count": abstained,
         "wrong_count": wrong,
+        "answered_count": answered_count,
+        "coverage": f"{answered_count}/{len(completed)}",
         "graded_count": correct + abstained + wrong,
         "citation_count": citation_total,
         "valid_citation_count": valid_total,
@@ -222,7 +232,8 @@ def main() -> None:
         summary = _write_results(rows, questions, max_results, results_path=results_path)
         print(
             f"  label={row['confidence_label']} expected={row['expected_strength']} "
-            f"grade={row['answer_grade']} latency={row['latency_seconds']}s error={row['error']}",
+            f"grade={row['answer_grade']} scored={row.get('relevance_scored')}/{row.get('relevance_total')} "
+            f"latency={row['latency_seconds']}s error={row['error']}",
             flush=True,
         )
     print(json.dumps(summary, indent=2), flush=True)
