@@ -140,16 +140,23 @@ python eval/run_eval.py
 
 `eval/run_eval.py` writes `eval/results.json`. Each question has a `reference_conclusion`. The script grades whether the answer reaches that conclusion and prints a sample of graded answers. Trials are off. The default model is `llama-3.1-8b-instant`. That ID was not in this account's Groq model list, so the recorded runs set `GROQ_MODEL=openai/gpt-oss-20b`.
 
-| Metric | Baseline | After step 2 (same pipeline, plus correctness grade) |
+| Metric | Baseline | Current (`openai/gpt-oss-20b`) |
 | --- | --- | --- |
-| Questions completed | 19 of 20 | 19 of 20 |
-| Citation validity | 1.000 (27/27) | 1.000 (25/25) |
-| Claim support | 0.926 (25/27) | 0.828 (24/29) |
-| Average latency | 55.13 s | 50.18 s |
-| Confidence label matches evidence grade | 0.211 (4/19) | 0.316 (6/19) |
-| Answer correctness | not measured | 0.579 (11/19) |
+| Questions completed | 19 of 20 | 20 of 20 |
+| Correct | not measured | 12 |
+| Abstained | not measured | 8 |
+| Wrong | not measured | 0 |
+| Coverage (answered / total) | not measured | 12/20 |
+| Citation validity | 1.000 (27/27) | 1.000 (44/44) |
+| Claim support | 0.926 (25/27) | 0.838 (31/37) |
+| Confidence label matches evidence grade | 0.211 (4/19) | 0.400 (8/20) |
+| Median latency | 59.3 s | 116.0 s |
 
-Step 2 did not change retrieval or generation. The support-rate change is run-to-run variation. Retrieval, structured summaries, and the quote-checked verifier are in the code. The post-change eval is pending. `eval/results_baseline.json` and `eval/results_after_step2.json` hold the two rows above.
+The baseline file did not grade conclusions. `eval/results.json` is the current run. `eval/results_baseline.json` is the baseline.
+
+## Experiments
+
+A broadening experiment searched more widely when a query returned fewer than 15 hits, by dropping the comparator and outcome, adding cohort and case-control studies for non-drug questions, and sending only the top 15 keyword-ranked candidates to the relevance scorer. It scored 9 correct, 10 abstained, and 1 wrong. Broadened queries pulled in the wrong patient population, and keyword pre-ranking cut on-topic papers before scoring. That experiment was reverted. The record is `eval/results_experiment_broadening.json`.
 
 
 ## Usage

@@ -86,7 +86,13 @@ def _build_llm(max_tokens: int | None = None, reasoning_effort: str | None = Non
         raise RuntimeError("GROQ_API_KEY is missing. Add it to your .env file or Vercel environment variables.")
 
     model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-    kwargs: dict[str, Any] = {"groq_api_key": api_key, "model_name": model, "temperature": temperature}
+    kwargs: dict[str, Any] = {
+        "groq_api_key": api_key,
+        "model_name": model,
+        "temperature": temperature,
+        "timeout": 120,
+        "max_retries": 0,
+    }
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     if reasoning_effort:
@@ -158,12 +164,25 @@ def _invoke_llm(messages: list[Any], *, reasoning_effort: str | None = None) -> 
             message = str(exc).lower()
             retryable = any(
                 token in message
-                for token in ("429", "rate limit", "rate_limit", "503", "over capacity", "tokens per minute")
+                for token in (
+                    "429",
+                    "rate limit",
+                    "rate_limit",
+                    "503",
+                    "over capacity",
+                    "tokens per minute",
+                    "timeout",
+                    "timed out",
+                    "connection",
+                    "ssl",
+                )
             )
             if not retryable or attempt == 4:
                 raise
             if "tokens per minute" in message or "413" in message:
                 time.sleep(min(65, 25 + 15 * attempt))
+            elif "timeout" in message or "timed out" in message or "connection" in message or "ssl" in message:
+                time.sleep(5 * (attempt + 1))
             else:
                 time.sleep(_retry_delay_seconds(exc, attempt))
     raise last_error or RuntimeError("LLM call failed.")
@@ -819,12 +838,20 @@ def quote_in_abstract(quote: str, abstract: str) -> bool:
 
     Case, whitespace, punctuation, and British/American spellings such as
     haemorrhage/hemorrhage are ignored so a copied sentence still matches.
+    A quote joined with "..." is supported only when every segment appears
+    in that same abstract.
     """
-    normalized_quote = _normalize_quote_text(quote)
     normalized_abstract = _normalize_quote_text(abstract)
-    if len(normalized_quote) < 20 or not normalized_abstract:
+    if not normalized_abstract:
         return False
-    return normalized_quote in normalized_abstract
+    segments = [
+        _normalize_quote_text(part)
+        for part in re.split(r"\.{3,}|…", quote or "")
+    ]
+    segments = [segment for segment in segments if segment]
+    if not segments or len(" ".join(segments)) < 20:
+        return False
+    return all(segment in normalized_abstract for segment in segments)
 
 
 def _summary_cache_key(question: str, pmid: str) -> str:
@@ -1521,14 +1548,30 @@ Return JSON only.
     return {"synthesis": synthesis}
 
 
+def _with_node_timing(name: str, fn):
+    def wrapped(state: ResearchState) -> ResearchState:
+        started = time.perf_counter()
+        result = fn(state)
+        elapsed = round(time.perf_counter() - started, 2)
+        print(f"node {name} {elapsed}s", flush=True)
+        timings = dict(state.get("node_timings") or {})
+        timings[name] = elapsed
+        if isinstance(result, dict):
+            result = dict(result)
+            result["node_timings"] = timings
+        return result
+
+    return wrapped
+
+
 def _build_graph():
     graph = StateGraph(ResearchState)
-    graph.add_node("plan_query", _plan_query)
-    graph.add_node("retrieve_literature", _retrieve_literature)
-    graph.add_node("rank_evidence", _rank_evidence)
-    graph.add_node("summarize_articles", _summarize_articles)
-    graph.add_node("synthesize", _synthesize)
-    graph.add_node("verify_citations", _verify_citations)
+    graph.add_node("plan_query", _with_node_timing("plan_query", _plan_query))
+    graph.add_node("retrieve_literature", _with_node_timing("retrieve_literature", _retrieve_literature))
+    graph.add_node("rank_evidence", _with_node_timing("rank_evidence", _rank_evidence))
+    graph.add_node("summarize_articles", _with_node_timing("summarize_articles", _summarize_articles))
+    graph.add_node("synthesize", _with_node_timing("synthesize", _synthesize))
+    graph.add_node("verify_citations", _with_node_timing("verify_citations", _verify_citations))
     graph.add_edge(START, "plan_query")
     graph.add_edge("plan_query", "retrieve_literature")
     graph.add_edge("retrieve_literature", "rank_evidence")

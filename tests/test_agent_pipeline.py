@@ -505,6 +505,27 @@ def test_quote_match_folds_british_and_american_spelling():
     assert quote_in_abstract(quote, abstract) is True
 
 
+def test_ellipsis_quote_is_supported_when_every_segment_is_in_the_abstract():
+    abstract = (
+        "There were highly significant reductions of about one-quarter in the first event rate "
+        "for non-fatal myocardial infarction or coronary death. "
+        "For the first occurrence of any of these major vascular events, there was a definite 24% reduction in the event rate."
+    )
+    stitched = (
+        "There were highly significant reductions of about one-quarter in the first event rate "
+        "for non-fatal myocardial infarction or coronary death ... "
+        "For the first occurrence of any of these major vascular events, there was a definite 24% reduction in the event rate."
+    )
+    invented = (
+        "There were highly significant reductions of about one-quarter in the first event rate "
+        "for non-fatal myocardial infarction or coronary death ... "
+        "Statins eliminated every cardiovascular event in the placebo arm."
+    )
+
+    assert quote_in_abstract(stitched, abstract) is True
+    assert quote_in_abstract(invented, abstract) is False
+
+
 def test_off_topic_articles_skip_synthesis(monkeypatch):
     monkeypatch.setattr("agent._batch_relevance_scores", lambda question, articles: {})
     plan = {

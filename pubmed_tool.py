@@ -454,6 +454,57 @@ def _ncbi_get(url: str, params: dict[str, Any]) -> requests.Response:
     raise last_error or requests.HTTPError("NCBI request failed.")
 
 
+ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+_MESH_HEADING_CACHE: dict[str, str | None] = {}
+
+
+def resolve_mesh_heading(term: str) -> str | None:
+    """Return the official MeSH heading for a term, or None when MeSH has no match.
+
+    A hit on an entry term is replaced with the descriptor's preferred heading.
+    """
+    cleaned = str(term or "").strip().strip('"')
+    if not cleaned:
+        return None
+    key = cleaned.lower()
+    if key in _MESH_HEADING_CACHE:
+        return _MESH_HEADING_CACHE[key]
+    try:
+        search = _ncbi_get(
+            ESEARCH_URL,
+            _ncbi_params(
+                {
+                    "db": "mesh",
+                    "term": f'"{cleaned}"[MeSH Terms]',
+                    "retmode": "json",
+                    "retmax": "5",
+                }
+            ),
+        ).json()
+        ids = (search.get("esearchresult") or {}).get("idlist") or []
+        if not ids:
+            _MESH_HEADING_CACHE[key] = None
+            return None
+        summary = _ncbi_get(
+            ESUMMARY_URL,
+            _ncbi_params({"db": "mesh", "id": ",".join(ids), "retmode": "json"}),
+        ).json()
+        result = summary.get("result") or {}
+        preferred = None
+        for uid in result.get("uids") or ids:
+            item = result.get(uid) or {}
+            names = [str(name).strip() for name in item.get("ds_meshterms") or [] if str(name).strip()]
+            if item.get("ds_recordtype") == "descriptor" and names and preferred is None:
+                preferred = names[0]
+        if preferred:
+            _MESH_HEADING_CACHE[key] = preferred
+            return preferred
+    except Exception:
+        return None
+    _MESH_HEADING_CACHE[key] = None
+    return None
+
+
 def _esearch_pmids(term: str, retmax: int) -> list[str]:
     esearch_params = _ncbi_params(
         {
@@ -482,7 +533,7 @@ def _retrieval_cache_key(
         "year_from": year_from,
         "year_to": year_to,
         "study_type": study_type or "",
-        "retrieval": "review-and-rct",
+        "retrieval": "mesh-pa-v3",
     }
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -559,9 +610,11 @@ def search_pubmed(
             collected = _esearch_pmids(excluded_term, max_results)
         else:
             collected = _review_and_rct_pmids(base_term, max_results)
-        if len(collected) > len(pmids):
-            pmids = collected
-        if len(pmids) >= max_results:
+        for pmid in collected:
+            if pmid not in pmids:
+                pmids.append(pmid)
+        # A narrow query should not hide the fallback. Five hits is enough to stop.
+        if len(pmids) >= 5:
             break
 
     if not pmids:
