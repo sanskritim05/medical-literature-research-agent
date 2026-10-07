@@ -1,20 +1,21 @@
-<!-- PROJECT LOGO -->
-<br />
 <div align="center">
   <h3 align="center">Medical Literature Research Agent</h3>
-
   <p align="center">
-    A Python web app that answers clinical questions by searching PubMed, summarizing abstracts, and returning evidence-based answers with citations.
+    Answers clinical questions from PubMed with ranked evidence and verified citations, and abstains when the evidence is too weak to answer.
   </p>
 </div>
 
-<!-- ABOUT THE PROJECT -->
-## About The Project
+> **Disclaimer:** For research and demonstration only. Not medical advice, and not for clinical decision-making.
 
-Medical Literature Research Agent helps users explore medical evidence through a simple web interface. Enter a clinical question in natural language, and the app searches PubMed, retrieves abstracts, summarizes the findings, and produces a final answer with inline citations and linked references.
+## About
 
-It also supports optional filters, treatment comparison, session-based follow-up questions, PDF export, and ongoing trial lookup from ClinicalTrials.gov.
+Ask a clinical question in plain language, such as *"Do statins reduce major cardiovascular events in adults with coronary heart disease?"* The agent searches PubMed, ranks the evidence, and writes an answer in which every cited claim must match an exact sentence from its source abstract.
 
+If it can't find enough on-topic evidence, it doesn't guess. It flags the question for expert review instead.
+
+**Result:** on a 20-question clinical evaluation, this design reduced wrong answers from **8 to 0**.
+
+Also supports study-type and date filters, treatment comparison, follow-up questions, PDF export, and ClinicalTrials.gov lookup.
 
 ### Built With
 
@@ -22,171 +23,109 @@ It also supports optional filters, treatment comparison, session-based follow-up
 * [![FastAPI][FastAPI.tiangolo.com]][FastAPI-url]
 * [![LangGraph][LangGraph]][LangGraph-url]
 * [![Groq][Groq.com]][Groq-url]
-* [![Vercel][Vercel.com]][Vercel-url]
 * [![React][React.js]][React-url]
 
-
-<!-- GETTING STARTED -->
-## Getting Started
-
-### Prerequisites
-
-* Python 3.10 or later
-* A [Groq API key](https://console.groq.com) (**required**)
-
-### Installation
-
-1. Clone the repo
-   ```sh
-   git clone https://github.com/sanskritim05/medical-literature-research-agent.git
-   ```
-2. Create the environment file
-   ```sh
-   cp .env.example .env
-   ```
-3. Add your credentials to `.env`
-   ```sh
-   LLM_PROVIDER=groq
-   GROQ_API_KEY=your_groq_api_key
-   GROQ_MODEL=llama-3.1-8b-instant
-   ```
-4. Install dependencies
-   ```sh
-   pip install -r requirements.txt
-   ```
-5. Install frontend dependencies and build (or run Vite in a second terminal)
-   ```sh
-   cd web && npm install && npm run build && cd ..
-   ```
-6. Start the app
-   ```sh
-   uvicorn main:app --reload
-   ```
-7. Open in your browser
-   ```text
-   http://127.0.0.1:8000
-   ```
-
-For UI hot reload during development, run `uvicorn main:app --reload` and `cd web && npm run dev` (Vite proxies `/api` to the backend).
-
-<!-- USAGE -->
-## Architecture
-
-The API still accepts the same research requests and returns the same response fields. New fields are added alongside them: `query_plan`, `comparison_query_plan`, `rankings`, and `citation_audit`. Each reference also includes `rank_score` and `rank_reason`.
+## How It Works
 
 ```mermaid
 flowchart LR
-  A[plan_query] --> B[retrieve_literature]
-  B --> C[rank_evidence]
-  C --> D[summarize_articles]
-  D --> E[synthesize]
-  E --> F[verify_citations]
+  A[Plan query] --> B[Retrieve]
+  B --> C[Rank evidence]
+  C --> G{Enough on-topic evidence?}
+  G -- yes --> D[Summarize]
+  G -- no --> X[Abstain: needs expert review]
+  D --> E[Synthesize]
+  E --> F[Verify citations]
 ```
 
-1. **plan_query** turns the question into PICO elements, a MeSH-style PubMed query, and a shorter fallback query. If that JSON fails validation, the existing rule-based query normalizer is used.
-2. **retrieve_literature** searches PubMed with the planned query, then the fallback, then the rule-based query. ClinicalTrials.gov and the local cache still run in parallel when requested.
-3. **rank_evidence** scores study design from PubMed publication-type metadata, plus overlap with the question and recency. Retracted articles are dropped. The search asks for systematic reviews and meta-analyses first, fetches up to 15 candidates, and keeps the top 4. In compare mode, numbering continues from the primary list into the comparison list.
-4. **summarize_articles** extracts population, intervention, comparator, outcome, effect direction, and significance for each kept abstract, in parallel, with the PMID attached.
-5. **synthesize** writes the final answer only from those structured summaries. It reports how many studies support the conclusion and calls out conflicting effect directions.
-6. **verify_citations** drops citation numbers that do not match a retrieved article. A claim counts as supported only when the model quotes an exact sentence from the cited abstract. Unsupported claims are removed and the confidence score is lowered.
+1. **Plan query.** The model extracts the question's PICO elements (population, intervention, comparator, outcome). Code builds the PubMed query from them and validates every MeSH term against NCBI's official vocabulary, so the model can't introduce invalid search terms.
+2. **Retrieve.** Searches systematic reviews and randomized trials together. If a query returns fewer than 5 results, a broader keyword query also runs. Retracted papers are excluded.
+3. **Rank evidence.** The model scores each paper's relevance from 0 to 2. Papers are ranked by relevance, then by study design from PubMed metadata.
+4. **Abstain gate.** If fewer than 2 of the top 4 papers are fully on topic, the agent returns *"needs expert review"* instead of an answer.
+5. **Summarize.** Each kept paper is summarized into the same fields: population, intervention, comparator, outcome, effect direction, and significance.
+6. **Synthesize.** States the conclusion supported by most of the higher-quality evidence, and notes conflicting results.
+7. **Verify citations.** Each cited claim must quote an exact sentence from its abstract (after normalizing punctuation and British/American spelling). Unsupported claims are removed.
 
-Groq `llama-3.1-8b-instant` is the default model. Set `GROQ_MODEL` to use another model.
-
+**Confidence score.** Combines the kept papers' relevance with the share of claims that pass verification, on a 0–100 scale: High 75+, Moderate 50+, Low below 50. Abstained answers have no score.
 
 ## Evaluation
 
-The harness is 20 clinical questions with well-established evidence grades.
+20 clinical questions with well-established evidence, each with a reference conclusion. Answers are graded **correct**, **abstained**, or **wrong**.
+
+| Metric | Before abstain gate | Current |
+| --- | --- | --- |
+| Correct | 11 | 12 |
+| Abstained | 0 | 8 |
+| **Wrong** | **8** | **0** |
+| Citation validity | 100% (25/25) | 100% (44/44) |
+| Claim support | 83% (24/29) | 84% (31/37) |
+
+Both runs used `openai/gpt-oss-20b` on Groq. The earlier run completed 19 of 20 questions due to a rate-limit error.
 
 ```sh
-pip install pytest
-pytest tests/test_agent_pipeline.py
-python eval/run_eval.py --subset
-python eval/run_eval.py
+python -m pytest tests/          # 31 tests
+python eval/run_eval.py --subset # 5 hard questions
+python eval/run_eval.py          # full evaluation
 ```
-
-`--subset` runs five questions (statins, ACE inhibitors, smoking cessation, metformin, and warfarin) and writes `eval/results_subset.json`.
-
-`eval/run_eval.py` writes `eval/results.json`. Each question has a `reference_conclusion`. The script grades whether the answer reaches that conclusion and prints a sample of graded answers. Trials are off. The default model is `llama-3.1-8b-instant`. That ID was not in this account's Groq model list, so the recorded runs set `GROQ_MODEL=openai/gpt-oss-20b`.
-
-| Metric | Baseline | Current (`openai/gpt-oss-20b`) |
-| --- | --- | --- |
-| Questions completed | 19 of 20 | 20 of 20 |
-| Correct | not measured | 12 |
-| Abstained | not measured | 8 |
-| Wrong | not measured | 0 |
-| Coverage (answered / total) | not measured | 12/20 |
-| Citation validity | 1.000 (27/27) | 1.000 (44/44) |
-| Claim support | 0.926 (25/27) | 0.838 (31/37) |
-| Confidence label matches evidence grade | 0.211 (4/19) | 0.400 (8/20) |
-| Median latency | 59.3 s | 116.0 s |
-
-The baseline file did not grade conclusions. `eval/results.json` is the current run. `eval/results_baseline.json` is the baseline.
 
 ## Experiments
 
-A broadening experiment searched more widely when a query returned fewer than 15 hits, by dropping the comparator and outcome, adding cohort and case-control studies for non-drug questions, and sending only the top 15 keyword-ranked candidates to the relevance scorer. It scored 9 correct, 10 abstained, and 1 wrong. Broadened queries pulled in the wrong patient population, and keyword pre-ranking cut on-topic papers before scoring. That experiment was reverted. The record is `eval/results_experiment_broadening.json`.
+**Looser abstain gate.** Requiring one on-topic paper instead of two would have answered 5 more questions, but 3 of those answers were wrong. The stricter gate was kept: a confident wrong answer is worse than flagging a question for review.
 
+**Query broadening.** Widening searches that returned few results scored 9 correct, 10 abstained, and 1 wrong. Broader queries pulled in studies from the wrong patient population, so the change was reverted. Results: `eval/results_experiment_broadening.json`.
 
-## Usage
+## Limitations
 
-1. Enter a clinical question in natural language.
-2. Optionally select a study type or date range.
-3. Run the search.
-4. Review the final answer, inline citations, and linked references.
-5. Optionally compare two treatments, simplify the answer, or export results as a PDF.
+* Reads abstracts only, not full papers.
+* Answers 12 of 20 evaluation questions; the rest abstain, mostly because retrieval didn't find enough on-topic papers.
+* Responses take about two minutes, partly due to API rate limits.
+* A 20-question evaluation set, so results are directional.
+* Doesn't formally grade study quality or risk of bias.
 
+## Getting Started
 
-<!-- EXAMPLE QUESTIONS -->
+Requires Python 3.10+, Node.js, and a [Groq API key](https://console.groq.com).
+
+```sh
+git clone https://github.com/sanskritim05/medical-literature-research-agent.git
+cd medical-literature-research-agent
+
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env   # then add your GROQ_API_KEY
+
+cd web && npm install && npm run build && cd ..
+uvicorn main:app --reload
+```
+
+Open `http://127.0.0.1:8000`.
+
+Optional `.env` settings: `GROQ_MODEL` (default `openai/gpt-oss-20b`) and `NCBI_API_KEY`, which raises PubMed's rate limit.
+
 ## Example Questions
 
-* In adults with acute low back pain, do NSAIDs improve pain and function compared with acetaminophen?
-* For type 2 diabetes, do GLP-1 receptor agonists reduce cardiovascular events compared with standard care?
-* In children with acute otitis media, when is watchful waiting appropriate compared with immediate antibiotics?
-* Compare intratympanic steroids versus oral steroids for idiopathic sudden sensorineural hearing loss.
+* Do statins reduce major cardiovascular events in adults with coronary heart disease?
+* Do SGLT2 inhibitors reduce heart failure hospitalization in patients with reduced ejection fraction?
+* Does the influenza vaccine reduce influenza illness in adults?
+* Do inhaled corticosteroids reduce asthma exacerbations?
 
+**Example of an abstention:** *"In adults with acute low back pain, do NSAIDs improve pain and function compared with acetaminophen?"* The agent flags this for expert review, because fewer than two retrieved papers directly compare the two treatments.
 
-<!-- PROJECT STRUCTURE -->
 ## Project Structure
 
 ```text
-medical-literature-research-agent/
-├── main.py
-├── agent.py
-├── pubmed_tool.py
+├── main.py               # FastAPI app
+├── agent.py              # Pipeline, ranking, abstain gate, verifier
+├── pubmed_tool.py        # PubMed and MeSH search, caching
 ├── eval/
-│   ├── questions.json
-│   ├── run_eval.py
-│   └── results.json
-├── tests/
-│   └── test_agent_pipeline.py
-├── web/                 # Evidentia React UI (Vite + plain CSS)
-│   ├── src/
-│   │   └── styles.css
-│   └── package.json
-├── vercel.json
-├── pyproject.toml
-├── .env.example
-├── .gitignore
-├── requirements.txt
-└── README.md
+│   ├── run_eval.py       # Evaluation runner and grader
+│   └── results*.json     # Current, baseline, subset, and experiment results
+├── tests/                # 31 tests
+└── web/                  # React frontend (Vite)
 ```
 
-`frontend_dist/` is generated by `cd web && npm run build` (local or on Vercel) and is not committed.
-
-<!-- MARKDOWN LINKS & IMAGES -->
-[contributors-shield]: https://img.shields.io/github/contributors/sanskritim05/medical-literature-research-agent.svg?style=for-the-badge
-[contributors-url]: https://github.com/sanskritim05/medical-literature-research-agent/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/sanskritim05/medical-literature-research-agent.svg?style=for-the-badge
-[forks-url]: https://github.com/sanskritim05/medical-literature-research-agent/network/members
-[stars-shield]: https://img.shields.io/github/stars/sanskritim05/medical-literature-research-agent.svg?style=for-the-badge
-[stars-url]: https://github.com/sanskritim05/medical-literature-research-agent/stargazers
-[issues-shield]: https://img.shields.io/github/issues/sanskritim05/medical-literature-research-agent.svg?style=for-the-badge
-[issues-url]: https://github.com/sanskritim05/medical-literature-research-agent/issues
-[license-shield]: https://img.shields.io/github/license/sanskritim05/medical-literature-research-agent.svg?style=for-the-badge
-[license-url]: https://github.com/sanskritim05/medical-literature-research-agent/blob/master/LICENSE.txt
-[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
-[linkedin-url]: https://linkedin.com/in/your_username
-[product-screenshot]: images/screenshot.png
 [Python.org]: https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white
 [Python-url]: https://python.org
 [FastAPI.tiangolo.com]: https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white
@@ -195,7 +134,5 @@ medical-literature-research-agent/
 [LangGraph-url]: https://github.com/langchain-ai/langgraph
 [Groq.com]: https://img.shields.io/badge/Groq-F55036?style=for-the-badge&logoColor=white
 [Groq-url]: https://groq.com
-[Vercel.com]: https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white
-[Vercel-url]: https://vercel.com
 [React.js]: https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB
 [React-url]: https://react.dev
