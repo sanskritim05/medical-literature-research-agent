@@ -35,7 +35,9 @@ export function exportResultPdf(result: ResearchResult) {
   }
 
   write(
-    `Confidence: ${result.synthesis.confidence.level} (${result.synthesis.confidence.score}/100) - ${result.synthesis.confidence.rationale}`,
+    result.synthesis.confidence.score == null
+      ? `Not answered: needs expert review - ${result.synthesis.confidence.rationale}`
+      : `Confidence: ${result.synthesis.confidence.level} (${result.synthesis.confidence.score}/100) - ${result.synthesis.confidence.rationale}`,
     10,
     "italic",
     10,

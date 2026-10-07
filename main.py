@@ -130,7 +130,10 @@ def _build_pdf(request: PDFRequest) -> bytes:
     ]
 
     if request.confidence:
-        confidence_line = f"{request.confidence.get('label', 'Unknown')} ({request.confidence.get('score', 'NA')})"
+        if request.confidence.get("score") is None:
+            confidence_line = "Not answered: needs expert review"
+        else:
+            confidence_line = f"{request.confidence.get('label', 'Unknown')} ({request.confidence.get('score')}/100)"
         story.extend(
             [
                 Paragraph("<b>Confidence</b>", styles["SectionHeading"]),

@@ -51,8 +51,8 @@ export interface CachedAbstract {
 }
 
 export interface Confidence {
-  level: "Low" | "Moderate" | "High";
-  score: number;
+  level: "Low" | "Moderate" | "High" | null;
+  score: number | null;
   rationale: string;
 }
 

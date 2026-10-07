@@ -647,6 +647,12 @@ a {
   color: #b03428;
 }
 
+.confidence-review {
+  border-color: rgba(102, 120, 138, 0.45);
+  background: rgba(102, 120, 138, 0.1);
+  color: #3d4d5c;
+}
+
 .answer-body {
   display: flex;
   flex-direction: column;

@@ -17,7 +17,6 @@ from langgraph.graph import END, START, StateGraph
 
 from pubmed_tool import (
     _normalize_pubmed_query,
-    assess_confidence,
     extract_highlight_sentences,
     search_cached_literature,
     search_clinical_trials,
@@ -933,6 +932,48 @@ Return valid JSON:
     return record
 
 
+def _label_for_confidence_score(score: int) -> str:
+    if score >= 75:
+        return "High"
+    if score >= 50:
+        return "Moderate"
+    return "Low"
+
+
+def answered_confidence(articles: list[dict[str, Any]], support_rate: float | None) -> dict[str, Any]:
+    """One score from kept-article relevance and claim support. The label is that score."""
+    relevance_values = [
+        min(2, max(0, int(article["relevance_llm_score"])))
+        for article in articles
+        if isinstance(article.get("relevance_llm_score"), int)
+    ]
+    relevance = sum(relevance_values) / (2 * len(relevance_values)) if relevance_values else 0.0
+    try:
+        support = float(support_rate) if support_rate is not None else 0.0
+    except (TypeError, ValueError):
+        support = 0.0
+    support = min(1.0, max(0.0, support))
+    score = int(round(relevance * support * 100))
+    return {
+        "score": score,
+        "label": _label_for_confidence_score(score),
+        "rationale": f"Kept-article relevance and claim support give a confidence of {score}/100.",
+    }
+
+
+def abstain_confidence(retrieved_count: int) -> dict[str, Any]:
+    count = max(0, int(retrieved_count))
+    return {
+        "score": None,
+        "label": None,
+        "review_status": "needs expert review",
+        "rationale": (
+            f"{count} abstracts were retrieved, but fewer than two were directly on topic, "
+            "so this question needs expert review."
+        ),
+    }
+
+
 def _apply_citation_confidence(confidence: dict[str, Any], audit: dict[str, Any]) -> dict[str, Any]:
     failures = len(audit.get("invalid_citations") or []) + len(audit.get("unsupported_claims") or [])
     zero_support = audit.get("support_rate") == 0
@@ -1634,9 +1675,6 @@ def run_research(
         evidence=evidence_by_pmid,
     )
     comparison_articles = result.get("comparison_articles", [])
-    confidence = assess_confidence(articles, question)
-    if synthesis.get("confidence_explanation"):
-        confidence["model_explanation"] = str(synthesis.get("confidence_explanation", "")).strip()
     citation_audit = synthesis.get("citation_audit") or {
         "validity_rate": None,
         "invalid_citations": [],
@@ -1644,14 +1682,12 @@ def run_research(
         "unsupported_claims": [],
         "removed_or_changed": synthesis.get("verifier_removed_or_changed") or [],
     }
-    confidence = _apply_citation_confidence(confidence, citation_audit)
     if result.get("needs_expert_review"):
-        confidence["label"] = "Low"
-        confidence["review_status"] = "needs expert review"
-        rationale = str(confidence.get("rationale") or "").strip()
-        review_note = " The retrieved evidence does not address the question, so this needs expert review."
-        if review_note.strip() not in rationale:
-            confidence["rationale"] = f"{rationale}{review_note}".strip()
+        confidence = abstain_confidence(int(result.get("relevance_total") or 0))
+    else:
+        confidence = answered_confidence(articles, citation_audit.get("support_rate"))
+        if synthesis.get("confidence_explanation"):
+            confidence["model_explanation"] = str(synthesis.get("confidence_explanation", "")).strip()
 
     comparison_references: list[dict[str, Any]] = []
     if mode == "compare":

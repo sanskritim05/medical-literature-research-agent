@@ -2,6 +2,8 @@ import json
 
 from agent import (
     _apply_citation_confidence,
+    abstain_confidence,
+    answered_confidence,
     _batch_relevance_scores,
     _coerce_query_plan,
     _invoke_llm,
@@ -769,3 +771,43 @@ def test_relevance_batches_score_every_pmid_and_retry_missing(monkeypatch):
     assert set(scores) == {str(index) for index in range(1, 13)}
     assert scores["12"] == 2
     assert any(call == ["12"] or "12" in call and len(call) < 6 for call in calls[1:])
+
+
+def test_abstained_response_has_null_score_and_expert_review_message():
+    payload = abstain_confidence(18)
+
+    assert payload["score"] is None
+    assert payload["rationale"] == (
+        "18 abstracts were retrieved, but fewer than two were directly on topic, "
+        "so this question needs expert review."
+    )
+    assert "informed this answer" not in payload["rationale"]
+
+
+def test_answered_confidence_label_matches_numeric_score():
+    high = answered_confidence(
+        [{"relevance_llm_score": 2}, {"relevance_llm_score": 2}],
+        1.0,
+    )
+    moderate = answered_confidence(
+        [{"relevance_llm_score": 2}, {"relevance_llm_score": 2}],
+        0.6,
+    )
+    low = answered_confidence(
+        [{"relevance_llm_score": 2}, {"relevance_llm_score": 1}],
+        0.2,
+    )
+
+    for payload in (high, moderate, low):
+        score = payload["score"]
+        if score >= 75:
+            expected = "High"
+        elif score >= 50:
+            expected = "Moderate"
+        else:
+            expected = "Low"
+        assert payload["label"] == expected
+
+    assert high["score"] == 100 and high["label"] == "High"
+    assert moderate["score"] == 60 and moderate["label"] == "Moderate"
+    assert low["score"] < 50 and low["label"] == "Low"

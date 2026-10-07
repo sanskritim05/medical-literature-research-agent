@@ -50,8 +50,8 @@ type ApiCached = {
 };
 
 type ApiConfidence = {
-  label?: string;
-  score?: number;
+  label?: string | null;
+  score?: number | null;
   rationale?: string;
   model_explanation?: string;
 };
@@ -73,15 +73,19 @@ type ApiResult = {
 };
 
 function mapConfidence(confidence: ApiConfidence | undefined): ResearchResult["synthesis"]["confidence"] {
-  const label = confidence?.label;
-  const level: ResearchResult["synthesis"]["confidence"]["level"] =
-    label === "High" || label === "Moderate" || label === "Low" ? label : "Moderate";
-  const raw = Number(confidence?.score ?? 0.5);
-  const score = raw <= 1 ? Math.round(raw * 100) : Math.round(raw);
-  const rationale =
+  const rationale = withoutEmDashes(
     [confidence?.rationale, confidence?.model_explanation].filter(Boolean).join(" ") ||
-    "Based on the retrieved abstracts.";
-  return { level, score, rationale: withoutEmDashes(rationale) };
+      "Based on the retrieved abstracts.",
+  );
+  if (confidence?.score == null) {
+    return { level: null, score: null, rationale };
+  }
+  const raw = Number(confidence.score);
+  const score = raw > 0 && raw <= 1 ? Math.round(raw * 100) : Math.round(raw);
+  const label = confidence.label;
+  const level: ResearchResult["synthesis"]["confidence"]["level"] =
+    label === "High" || label === "Moderate" || label === "Low" ? label : "Low";
+  return { level, score, rationale };
 }
 
 function mapReference(ref: ApiReference, fallbackIndex: number) {

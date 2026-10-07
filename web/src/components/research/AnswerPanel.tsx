@@ -37,7 +37,10 @@ function CitedText({ text }: { text: string }) {
   );
 }
 
-function ConfidencePill({ level, score }: { level: string; score: number }) {
+function ConfidencePill({ level, score }: { level: string | null; score: number | null }) {
+  if (score == null) {
+    return <span className="confidence-pill confidence-review">Not answered: needs expert review</span>;
+  }
   const tone =
     level === "High"
       ? "confidence-high"
