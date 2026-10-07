@@ -69,38 +69,6 @@ It also supports optional filters, treatment comparison, session-based follow-up
 
 For UI hot reload during development, run `uvicorn main:app --reload` and `cd web && npm run dev` (Vite proxies `/api` to the backend).
 
-
-## Deploy on Vercel
-
-This app is configured for Vercel’s FastAPI runtime (`main.py` + `vercel.json`).
-
-1. Push the repo to GitHub and import it in [Vercel](https://vercel.com/new).
-2. In **Project Settings → Environment Variables**, add:
-
-   | Name | Required | Notes |
-   |------|----------|--------|
-   | `GROQ_API_KEY` | **Yes** | From [console.groq.com](https://console.groq.com) |
-   | `LLM_PROVIDER` | Recommended | Set to `groq` |
-   | `GROQ_MODEL` | Optional | Default `llama-3.1-8b-instant` |
-   | `NCBI_API_KEY` | Optional | Free NCBI key helps avoid PubMed rate limits on shared IPs |
-   | `NCBI_EMAIL` | Optional | Contact email for NCBI E-utilities etiquette |
-   | `LANGSMITH_API_KEY` | Optional | Only if you enable LangSmith tracing |
-
-3. Leave **Output Directory** blank in Vercel project settings (do not set it to `public`).
-4. Deploy. Research requests can take a while; `vercel.json` sets `maxDuration` to **300 seconds**.
-
-5. Or deploy from the CLI:
-   ```sh
-   npx vercel
-   ```
-   Then set the same env vars in the Vercel dashboard (or with `npx vercel env add`).
-
-**Notes**
-- Ollama is for local use only; do not set `LLM_PROVIDER=ollama` on Vercel.
-- PubMed + ClinicalTrials.gov need no paid keys.
-- Session memory is in-process (ephemeral on serverless). Browser history still works via `localStorage`.
-
-
 <!-- USAGE -->
 ## Architecture
 
